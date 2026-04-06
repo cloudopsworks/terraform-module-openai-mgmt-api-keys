@@ -1,12 +1,12 @@
-name: Terraform Transit Gateway Module
+name: Terraform OpenAI Management API Keys Module
 #logo: logo/logo.jpg
 badges:
   - name: Latest Release
-    image: https://img.shields.io/github/release/<owner/repo>.svg?style=for-the-badge
-    url: https://github.com/<owner/repo>/releases/latest
+    image: https://img.shields.io/github/release/cloudopsworks/terraform-module-openai-mgmt-api-keys.svg?style=for-the-badge
+    url: https://github.com/cloudopsworks/terraform-module-openai-mgmt-api-keys/releases/latest
   - name: Last Updated
-    image: https://img.shields.io/github/last-commit/<owner/repo>.svg?style=for-the-badge
-    url: https://github.com/<owner/repo>/commits
+    image: https://img.shields.io/github/last-commit/cloudopsworks/terraform-module-openai-mgmt-api-keys.svg?style=for-the-badge
+    url: https://github.com/cloudopsworks/terraform-module-openai-mgmt-api-keys/commits
 
 license: "APACHE2"
 
@@ -15,23 +15,275 @@ copyrights:
     url: "https://cloudopsworks.co"
     year: "2026"
 
-github_repo: <owner/repo>
+github_repo: cloudopsworks/terraform-module-openai-mgmt-api-keys
 
 description: |-
-  <description>
+  Terraform module for managing OpenAI project service accounts and API keys via the
+  [mkdev-me/openai](https://registry.terraform.io/providers/mkdev-me/openai/latest) provider.
+  API keys are automatically created when a service account is provisioned and are stored
+  securely in AWS Secrets Manager. Both project-scoped service account keys and
+  organisation-level admin keys are supported.
 
 # Introduction to the project
 introduction: |-
-#  This is an introduction.
+  ## Overview
+
+  This module automates the full lifecycle of OpenAI API credentials on AWS:
+
+  1. **Project service accounts** — creates an `openai_project_service_account` for each
+     configured service account inside a project. OpenAI automatically provisions an API key
+     when the service account is created; that key is captured and stored in AWS Secrets Manager.
+
+  2. **Organisation admin keys** — creates `openai_admin_api_key` resources for
+     organisation-level access with optional scope restrictions and expiry.
+
+  3. **AWS Secrets Manager** — every key (project service account or admin) is persisted as a
+     Secrets Manager secret immediately after creation. Secrets can be stored either as a
+     JSON object `{"api_key": "<value>"}` (default) or as a plain string when `plain = true`.
+
+  ### Naming convention
+
+  Both the OpenAI resource name and the corresponding Secrets Manager secret name support
+  two modes, configurable per entry:
+
+  | Mode | Value used |
+  |------|-----------|
+  | `name_prefix` | `<name_prefix>-<system_name>` where `system_name` encodes org, environment, spoke, and region |
+  | `name` | fixed string, used verbatim |
+
+  Secrets Manager secret paths default to `/<org_unit>/<env_name>/<env_type>` and can be
+  overridden per entry with `secret.path`.
+
+  ### Secret structure
+
+  | `plain` | Stored value |
+  |---------|-------------|
+  | `false` (default) | `{"api_key": "sk-..."}` |
+  | `true` | `sk-...` |
 
 # How to use this project
 usage: |-
+  ### Project service accounts with auto-generated API keys
+
+  ```hcl
+  # terragrunt.hcl
+  terraform {
+    source = "git::https://github.com/cloudopsworks/terraform-module-openai-mgmt-api-keys.git//?ref=v1.0.0"
+  }
+
+  inputs = {
+    org = {
+      organization_name = "acme"
+      organization_unit = "platform"
+      environment_type  = "production"
+      environment_name  = "prod"
+    }
+
+    spoke_def = "001"
+
+    settings = {
+      projects = {
+        # Logical key — not the OpenAI project ID.
+        backend-services = {
+          project_id = "proj_abc123"   # (Required) The OpenAI project ID
+
+          service_accounts = {
+            # Service account whose name is derived from name_prefix + "-" + system_name.
+            # Secret stored as JSON: {"api_key": "sk-..."}
+            api-worker = {
+              name_prefix = "backend-worker"
+              secret = {
+                name_prefix = "backend-worker-openai"
+                # path defaults to /<org_unit>/<env_name>/<env_type>
+              }
+            }
+
+            # Service account with a fixed name. Secret stored as plain string.
+            legacy-integration = {
+              name = "legacy-integration-sa"
+              secret = {
+                name  = "legacy-integration-openai-key"
+                plain = true
+              }
+            }
+          }
+        }
+
+        ml-experiments = {
+          project_id = "proj_xyz789"
+
+          service_accounts = {
+            trainer = {
+              name_prefix = "ml-trainer"
+              secret = {
+                name_prefix = "ml-trainer-openai"
+                path        = "/acme/ml/secrets"  # (Optional) custom path
+              }
+            }
+          }
+        }
+      }
+
+      admin_keys = {
+        # Org-level admin key scoped to read/write projects and API keys.
+        ci-pipeline = {
+          name_prefix = "ci-admin"
+          scopes      = ["projects.read", "projects.write", "api_keys.read", "api_keys.write"]
+          expires_at  = 1893456000  # 2030-01-01 Unix timestamp
+          secret = {
+            name_prefix = "ci-admin-openai"
+          }
+        }
+
+        # Unrestricted admin key stored as plain string.
+        ops-break-glass = {
+          name = "ops-break-glass"
+          secret = {
+            name  = "ops-break-glass-openai-admin"
+            plain = true
+          }
+        }
+      }
+    }
+  }
+  ```
+
+  ### Variable reference
+
+  | Variable | Type | Required | Description |
+  |----------|------|----------|-------------|
+  | `org.organization_name` | `string` | yes | Organisation name used in tagging |
+  | `org.organization_unit` | `string` | yes | Org unit; forms the first segment of the default secret path |
+  | `org.environment_type` | `string` | yes | Environment type (e.g. `production`, `staging`) |
+  | `org.environment_name` | `string` | yes | Short environment name (e.g. `prod`, `stg`) |
+  | `spoke_def` | `string` | no | Three-digit spoke ID. Default: `"001"` |
+  | `extra_tags` | `map(string)` | no | Additional tags merged onto all resources |
+  | `settings.projects` | `map(object)` | no | Map of OpenAI projects keyed by logical name |
+  | `settings.admin_keys` | `map(object)` | no | Map of org-level admin API keys keyed by logical name |
+
+  #### `settings.projects.<key>`
+
+  | Attribute | Type | Required | Description |
+  |-----------|------|----------|-------------|
+  | `project_id` | `string` | **yes** | The OpenAI project ID (e.g. `proj_abc123`) |
+  | `service_accounts` | `map(object)` | no | Service accounts to create in this project |
+
+  #### `settings.projects.<key>.service_accounts.<key>`
+
+  | Attribute | Type | Required | Description |
+  |-----------|------|----------|-------------|
+  | `name_prefix` | `string` | no* | Name prefix; composed as `name_prefix-<system_name>` |
+  | `name` | `string` | no* | Fixed verbatim name for the service account |
+  | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to service account naming |
+  | `secret.name` | `string` | no | Fixed verbatim secret name |
+  | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>` |
+  | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
+
+  \* One of `name_prefix` or `name` must be provided.
+
+  #### `settings.admin_keys.<key>`
+
+  | Attribute | Type | Required | Description |
+  |-----------|------|----------|-------------|
+  | `name_prefix` | `string` | no* | Name prefix; composed as `name_prefix-<system_name>` |
+  | `name` | `string` | no* | Fixed verbatim name for the admin key |
+  | `scopes` | `list(string)` | no | Permission scopes. Possible values: `users.read`, `users.write`, `projects.read`, `projects.write`, `api_keys.read`, `api_keys.write`, `rate_limits.read`, `rate_limits.write`. Default: `[]` (all scopes) |
+  | `expires_at` | `number` | no | Unix timestamp for key expiration |
+  | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to admin key naming |
+  | `secret.name` | `string` | no | Fixed verbatim secret name |
+  | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>` |
+  | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
+
+  \* One of `name_prefix` or `name` must be provided.
 
 # Example usage
 examples: |-
+  ### Minimal — single project, one service account
+
+  ```hcl
+  inputs = {
+    org = {
+      organization_name = "acme"
+      organization_unit = "platform"
+      environment_type  = "production"
+      environment_name  = "prod"
+    }
+
+    settings = {
+      projects = {
+        my-project = {
+          project_id = "proj_abc123"
+          service_accounts = {
+            default = {
+              name_prefix = "myapp"
+            }
+          }
+        }
+      }
+    }
+  }
+  ```
+
+  The service account is named `myapp-<system_name>` and its API key is stored at
+  `/platform/prod/production/openai-api-key/myapp-<system_name>` as
+  `{"api_key": "sk-..."}`.
+
+  ---
+
+  ### Admin key only
+
+  ```hcl
+  inputs = {
+    org = {
+      organization_name = "acme"
+      organization_unit = "platform"
+      environment_type  = "production"
+      environment_name  = "prod"
+    }
+
+    settings = {
+      admin_keys = {
+        terraform-provisioner = {
+          name_prefix = "tf-provisioner"
+          scopes      = ["projects.read", "projects.write", "api_keys.read", "api_keys.write"]
+        }
+      }
+    }
+  }
+  ```
 
 # How to get started quickly
 quickstart: |-
+  1. Ensure your Terragrunt stack has the following provider credentials available:
+     - **AWS** — standard credential chain (IAM role, environment variables, etc.)
+     - **OpenAI admin key** — set `OPENAI_ADMIN_KEY` in the environment for managing
+       admin keys and service accounts.
+
+  2. Reference the module in your `terragrunt.hcl`:
+
+     ```hcl
+     terraform {
+       source = "git::https://github.com/cloudopsworks/terraform-module-openai-mgmt-api-keys.git//?ref=v1.0.0"
+     }
+     ```
+
+  3. Configure `inputs` with at minimum `org` and one entry under `settings.projects` or
+     `settings.admin_keys`.
+
+  4. Run:
+
+     ```sh
+     terragrunt init
+     terragrunt plan
+     terragrunt apply
+     ```
+
+  5. Retrieve the stored API key from Secrets Manager:
+
+     ```sh
+     aws secretsmanager get-secret-value \
+       --secret-id "$(terragrunt output -raw secret_names | jq -r 'to_entries[0].value')"
+     ```
 
 include:
   - "docs/targets.md"
