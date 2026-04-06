@@ -12,7 +12,7 @@
 
 resource "aws_secretsmanager_secret" "this" {
   for_each = local.service_accounts
-  name     = "${local.secret_paths[each.key]}/openai-api-key/${local.secret_names[each.key]}"
+  name     = "${local.secret_paths[each.key]}/${local.secret_names[each.key]}"
   tags     = local.all_tags
 }
 
@@ -28,7 +28,7 @@ resource "aws_secretsmanager_secret_version" "this" {
 
 resource "aws_secretsmanager_secret" "admin_key" {
   for_each = local.admin_keys
-  name     = "${local.admin_secret_paths[each.key]}/openai-admin-key/${local.admin_secret_names[each.key]}"
+  name     = "${local.admin_secret_paths[each.key]}/admin/${local.admin_secret_names[each.key]}"
   tags     = local.all_tags
 }
 
