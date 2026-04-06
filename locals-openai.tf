@@ -14,6 +14,7 @@ locals {
     for item in flatten([
       for proj_key, proj in try(var.settings.projects, {}) : [
         for sa_key, sa in try(proj.service_accounts, {}) : {
+          project_key = proj_key
           key         = "${proj_key}/${sa_key}"
           project_id  = proj.project_id
           name_prefix = try(sa.name_prefix, null)
@@ -49,7 +50,7 @@ locals {
   # Defaults to the module-level secret_store_path derived from org variables.
   secret_paths = {
     for k, v in local.service_accounts : k => (
-      try(v.secret.path, null) != null ? v.secret.path : local.secret_store_path
+      try(v.secret.path, null) != null ? v.secret.path : format("%s/%s", local.secret_store_path, v.project_key)
     )
   }
 
