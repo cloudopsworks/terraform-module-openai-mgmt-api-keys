@@ -1,0 +1,43 @@
+##
+# (c) 2021-2026
+#     Cloud Ops Works LLC - https://cloudops.works/
+#     Find us on:
+#       GitHub: https://github.com/cloudopsworks
+#       WebSite: https://cloudops.works
+#     Distributed Under Apache v2.0 License
+#
+# Stores the OpenAI service account API key in AWS Secrets Manager.
+# Secret path: <secret_path>/openai-api-key/<secret_name>
+# The api_key_value from the service account resource is only available at creation time.
+
+resource "aws_secretsmanager_secret" "this" {
+  for_each = local.service_accounts
+  name     = "${local.secret_paths[each.key]}/openai-api-key/${local.secret_names[each.key]}"
+  tags     = local.all_tags
+}
+
+resource "aws_secretsmanager_secret_version" "this" {
+  for_each  = local.service_accounts
+  secret_id = aws_secretsmanager_secret.this[each.key].id
+  secret_string = local.secret_plain[each.key] ? (
+    openai_project_service_account.this[each.key].api_key_value
+    ) : (
+    jsonencode({ api_key = openai_project_service_account.this[each.key].api_key_value })
+  )
+}
+
+resource "aws_secretsmanager_secret" "admin_key" {
+  for_each = local.admin_keys
+  name     = "${local.admin_secret_paths[each.key]}/openai-admin-key/${local.admin_secret_names[each.key]}"
+  tags     = local.all_tags
+}
+
+resource "aws_secretsmanager_secret_version" "admin_key" {
+  for_each  = local.admin_keys
+  secret_id = aws_secretsmanager_secret.admin_key[each.key].id
+  secret_string = local.admin_secret_plain[each.key] ? (
+    openai_admin_api_key.this[each.key].api_key_value
+    ) : (
+    jsonencode({ api_key = openai_admin_api_key.this[each.key].api_key_value })
+  )
+}
