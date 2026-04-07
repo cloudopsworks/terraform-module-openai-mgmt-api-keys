@@ -94,6 +94,7 @@ usage: |-
               name_prefix = "backend-worker"
               secret = {
                 name_prefix = "backend-worker-openai"
+                description = "OpenAI API key for the backend worker service account"
                 # path defaults to /<org_unit>/<env_name>/<env_type>
               }
             }
@@ -132,6 +133,7 @@ usage: |-
           expires_at  = 1893456000  # 2030-01-01 Unix timestamp
           secret = {
             name_prefix = "ci-admin-openai"
+            description = "CI pipeline org-level admin key"
           }
         }
 
@@ -178,6 +180,7 @@ usage: |-
   | `secret.name` | `string` | no | Fixed verbatim secret name |
   | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>` |
   | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
+  | `secret.description` | `string` | no | Human-readable description for the Secrets Manager secret |
 
   \* One of `name_prefix` or `name` must be provided.
 
@@ -193,6 +196,7 @@ usage: |-
   | `secret.name` | `string` | no | Fixed verbatim secret name |
   | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>` |
   | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
+  | `secret.description` | `string` | no | Human-readable description for the Secrets Manager secret |
 
   \* One of `name_prefix` or `name` must be provided.
 
