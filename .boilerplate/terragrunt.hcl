@@ -29,7 +29,7 @@ locals {
 }
 
 include "root" {
-  path = find_in_parent_folders("root.hcl")
+  path = find_in_parent_folders("{{ .RootFileName }}")
 }
 
 generate "provider-openai" {
@@ -43,7 +43,7 @@ EOF
 }
 
 terraform {
-  source = "git::https://github.com/cloudopsworks/terraform-module-openai-mgmt-api-keys.git//?ref=v1.0.0"
+  source = "{{ .sourceUrl }}"
   extra_arguments "openai_api_key" {
     commands = ["plan", "apply", "destroy", "import"]
     env_vars = {
