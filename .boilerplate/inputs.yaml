@@ -1,18 +1,28 @@
 # Module configuration
-# Required variables
-{{- range .requiredVariables }}
-{{- if ne .Name "org"}}
-# Description {{ .Description }} , Type: {{ .Type }}
-{{ .Name }}: {{ .DefaultValuePlaceholder }}
-{{- end }}
-
-{{- end }}
-# Optional variables
-{{- range .optionalVariables }}
-{{- if ne .Name "is_hub" "spoke_def" "extra_args" }}
-# Description {{ .Description }} , Type: {{ .Type }}
-#{{ .Name }}: {{ .DefaultValue }}
-{{- end }}
-
-{{- end }}
-
+# settings:                          # (Optional) Settings for OpenAI API key management
+#   projects:                        # (Optional) Map of OpenAI projects keyed by a logical name
+#     my-project:                    # Logical key used to identify the project (not the OpenAI project ID)
+#       project_id: "proj_xxx"       # (Required) The OpenAI project ID
+#       service_accounts:            # (Optional) Map of service account configurations keyed by logical name
+#         <key>:
+#           name_prefix: "myapp"     # (Optional) Name prefix; final name = name_prefix + "-" + system_name
+#           name: "fixed-name"       # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
+#           secret:                  # (Optional) AWS Secrets Manager configuration for storing the API key
+#             name_prefix: "myapp"   # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
+#             name: "fixed-secret"   # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
+#             path: "/custom/path"   # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>
+#             plain: false           # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
+#             description: "..."     # (Optional) Human-readable description for the Secrets Manager secret
+#   admin_keys:                      # (Optional) Map of org-level admin API keys keyed by logical name
+#     <key>:
+#       name_prefix: "admin"         # (Optional) Name prefix; final name = name_prefix + "-" + system_name
+#       name: "fixed-name"           # (Optional) Fixed name for the admin API key (mutually exclusive with name_prefix)
+#       scopes: []                   # (Optional) List of permission scopes (e.g. "projects.read", "api_keys.write")
+#       expires_at: 1735689600       # (Optional) Unix timestamp for key expiration
+#       secret:                      # (Optional) AWS Secrets Manager configuration for storing the API key
+#         name_prefix: "admin"       # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
+#         name: "fixed-secret"       # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
+#         path: "/custom/path"       # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>
+#         plain: false               # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
+#         description: "..."         # (Optional) Human-readable description for the Secrets Manager secret
+settings: {}
