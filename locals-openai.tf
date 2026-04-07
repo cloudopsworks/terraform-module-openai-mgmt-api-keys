@@ -59,6 +59,11 @@ locals {
     for k, v in local.service_accounts : k => try(v.secret.plain, false)
   }
 
+  # Compute the optional description for each service account secret.
+  secret_descriptions = {
+    for k, v in local.service_accounts : k => try(v.secret.description, null)
+  }
+
   # Admin keys: org-level, not tied to a project.
   admin_keys = try(var.settings.admin_keys, {})
 
@@ -87,5 +92,10 @@ locals {
 
   admin_secret_plain = {
     for k, v in local.admin_keys : k => try(v.secret.plain, false)
+  }
+
+  # Compute the optional description for each admin key secret.
+  admin_secret_descriptions = {
+    for k, v in local.admin_keys : k => try(v.secret.description, null)
   }
 }
