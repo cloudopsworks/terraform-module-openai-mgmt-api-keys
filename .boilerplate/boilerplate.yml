@@ -16,3 +16,9 @@ variables:
     type: map
     default: {}
   # End - Generic Boilerplate Variables Setup
+
+hooks:
+  after:
+    - command: "git"
+      args: ["add", "."]
+      dir: "{{ outputFolder }}"

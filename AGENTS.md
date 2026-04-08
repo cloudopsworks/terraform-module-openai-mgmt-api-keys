@@ -6,7 +6,8 @@ This document provides instructions for AI Agents working with the implementatio
 - **Avoid In place Modification** for implementations terraform-module-template is a template repository should not contain implementations.
 - **Use Separate Repository for Implementations**: Implementations should be stored in separate repositories to maintain modularity and version control.
   - New repositories should be named in a way that reflects their purpose and functionality, prefixed with `terraform-module-` followed by the cloud provider (e.g., `terraform-module-aws`, `terraform-module-gcp`, `terraform-module-azurerm`).
-  - Initialize new repostories for GitFlow: `make gitflow/init`
+  - This template repository should be used as a boilerplate for new implementations.
+  - Use GitHub Flow way of work for template and implementation repositories.
 - **Supported Providers**:
  - AWS
  - GCP
@@ -61,18 +62,35 @@ This document provides instructions for AI Agents working with the implementatio
   - Formatting: `make fmt`
   - Validation & Linting: `make lint`
 - **Repository Management**
-  - Use process as described in the contributing guidelines: https://cloudopsworks.co/resources/gitflow-way-of-work/
+  - Use process as described in the contributing guidelines: [GitHub Flow](https://cloudopsworks.co/resources/githubflow-way-of-work/)
 
 
 ## Versioning Management
 
-Module versioning follows a feature-based development process branching directly from `master`. Use `make` targets whenever available for branch and release operations.
+Module versioning follows GitHub Flow — a simplified branching model where feature branches are created from and merged back into `master`. Use `make` targets whenever available for branch and release operations.
 
 ### General Rules
 
 - **Never push directly to `master`**. All changes must flow through feature or hotfix branches and be merged via pull requests.
 - Follow [Semantic Versioning](https://semver.org/) (`MAJOR.MINOR.PATCH`) for all module tags.
-- There is no `develop` branch — feature branches are created from and merged back into `master`.
+- There is no `develop` branch — all work flows directly through feature branches to `master`. This approach simplifies the development workflow and enables continuous integration and deployment from the main branch.
+
+### Semver Commit Annotations
+
+To trigger the correct version bump in CI, include a semver annotation in your commit message or PR description:
+
+| Change Type             | Annotation keywords                        |
+|-------------------------|--------------------------------------------|
+| Major / breaking change | `+semver: major` or `+semver: breaking`    |
+| Minor / feature change  | `+semver: minor` or `+semver: feature`     |
+| Fix / patch change      | `+semver: fix` or `+semver: patch`         |
+
+Example commit messages:
+```
+feat: add support for VPC endpoints +semver: minor
+fix: correct IAM policy ARN +semver: fix
+refactor!: remove deprecated outputs +semver: breaking
+```
 
 ### New Module Features and Provider Version Upgrades
 
@@ -96,31 +114,33 @@ For provider upgrades, increment the semver digit accordingly: **MAJOR** for bre
 
 ### Workflow Version Upgrades (Minor or Major)
 
-Upgrades to the GitFlow workflow version itself — whether minor or major — are treated as **hotfixes**:
+Upgrades to the workflow version itself — whether minor or major — follow the same GitHub Flow feature branch process as any other change:
 
-1. Create a hotfix branch from `master`:
+1. Create a feature branch from `master`:
    ```sh
-   make gitflow/hotfix/start
+   make gitflow/feature/start-no-develop:<feature-name>
    ```
-2. Publish the hotfix branch to the remote:
+   Use a descriptive name such as `workflow-upgrade-v2` or `github-flow-migration`.
+2. Apply the workflow version changes and validate:
    ```sh
-   make gitflow/hotfix/publish
+   make fmt
+   make lint
    ```
-3. Apply the workflow version changes on the hotfix branch.
-4. Finish the hotfix — this merges it into `master`:
+3. Finish the feature — this merges it back into `master` via pull request:
    ```sh
-   make gitflow/hotfix/finish
+   make gitflow/feature/finish-no-develop:<feature-name>
    ```
 
 ### Summary Table
 
-| Change Type                              | Branch Type | Merges Into | Semver Impact |
-|------------------------------------------|-------------|-------------|---------------|
-| Workflow version upgrade (minor/major)   | `hotfix`    | `master`    | PATCH / MINOR |
-| Provider major version upgrade           | `feature`   | `master`    | MAJOR         |
-| Provider minor/patch version upgrade     | `feature`   | `master`    | MINOR / PATCH |
-| New module feature                       | `feature`   | `master`    | MINOR         |
-| Bug fix                                  | `hotfix`    | `master`    | PATCH         |
+| Change Type                              | Branch Type | Merges Into | Semver Impact | Annotation                          |
+|------------------------------------------|-------------|-------------|---------------|-------------------------------------|
+| Workflow version upgrade (minor/major)   | `feature`   | `master`    | PATCH / MINOR | `+semver: patch` / `+semver: minor` |
+| Provider major version upgrade           | `feature`   | `master`    | MAJOR         | `+semver: major`                    |
+| Provider minor/patch version upgrade     | `feature`   | `master`    | MINOR / PATCH | `+semver: minor` / `+semver: patch` |
+| New module feature                       | `feature`   | `master`    | MINOR         | `+semver: feature`                  |
+| Bug fix                                  | `feature`   | `master`    | PATCH         | `+semver: fix`                      |
+| Breaking / incompatible change           | `feature`   | `master`    | MAJOR         | `+semver: breaking`                 |
 
 
 ## Documentation Guidelines
