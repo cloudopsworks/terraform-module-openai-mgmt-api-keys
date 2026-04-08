@@ -43,3 +43,8 @@ dependencies:
 
 partials:
   - ../parts/*.tftpl
+
+hooks:
+  after:
+    - command: "{{ templateUrl }}/../scripts/move-tftpl.sh"
+      dir: "{{ outputFolder }}"
