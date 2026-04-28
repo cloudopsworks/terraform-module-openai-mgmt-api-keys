@@ -86,7 +86,7 @@ locals {
 
   admin_secret_paths = {
     for k, v in local.admin_keys : k => (
-      try(v.secret.path, null) != null ? trimsuffix(trimsuffix(v.secret.path, "/"), "/admin") : local.secret_store_path
+      try(v.secret.path, null) != null ? trimsuffix(v.secret.path, "/") : format("%s/admin", local.secret_store_path)
     )
   }
 

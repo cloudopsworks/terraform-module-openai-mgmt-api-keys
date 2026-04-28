@@ -57,7 +57,8 @@ introduction: |-
   - admin keys: `/<org_unit>/<env_name>/<env_type>/admin`
 
   Both defaults can be overridden per entry with `secret.path`. For admin keys, the
-  module normalises custom paths so the final secret name always ends with `/admin/<secret_name>`.
+  `/admin` segment is added only when `secret.path` is omitted; an explicit `secret.path`
+  is used as the full parent path for the final secret name.
 
   ### Secret structure
 
@@ -183,7 +184,7 @@ usage: |-
   | `name` | `string` | no* | Fixed verbatim name for the service account |
   | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to service account naming |
   | `secret.name` | `string` | no | Fixed verbatim secret name |
-  | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>` |
+  | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>/<project_key>` |
   | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
   | `secret.description` | `string` | no | Human-readable description for the Secrets Manager secret |
 
@@ -199,7 +200,7 @@ usage: |-
   | `expires_at` | `number` | no | Unix timestamp for key expiration |
   | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to admin key naming |
   | `secret.name` | `string` | no | Fixed verbatim secret name |
-  | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>` |
+  | `secret.path` | `string` | no | Full admin secret parent path. Default: `/<org_unit>/<env_name>/<env_type>/admin` |
   | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
   | `secret.description` | `string` | no | Human-readable description for the Secrets Manager secret |
 
