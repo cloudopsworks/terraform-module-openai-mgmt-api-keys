@@ -74,8 +74,13 @@ two modes, configurable per entry:
 | `name_prefix` | `<name_prefix>-<system_name>` where `system_name` encodes org, environment, spoke, and region |
 | `name` | fixed string, used verbatim |
 
-Secrets Manager secret paths default to `/<org_unit>/<env_name>/<env_type>` and can be
-overridden per entry with `secret.path`.
+Secrets Manager secret paths default to:
+
+- project service accounts: `/<org_unit>/<env_name>/<env_type>/<project_key>`
+- admin keys: `/<org_unit>/<env_name>/<env_type>/admin`
+
+Both defaults can be overridden per entry with `secret.path`. For admin keys, the
+module normalises custom paths so the final secret name always ends with `/admin/<secret_name>`.
 
 ### Secret structure
 
@@ -123,7 +128,7 @@ inputs = {
             secret = {
               name_prefix = "backend-worker-openai"
               description = "OpenAI API key for the backend worker service account"
-              # path defaults to /<org_unit>/<env_name>/<env_type>
+              # path defaults to /<org_unit>/<env_name>/<env_type>/backend-services
             }
           }
 
@@ -291,7 +296,7 @@ inputs = {
 ```
 
 The service account is named `myapp-<system_name>` and its API key is stored at
-`/platform/prod/production/openai-api-key/myapp-<system_name>` as
+`/platform/prod/production/my-project/myapp-<system_name>` as
 `{"api_key": "sk-..."}`.
 
 ---
@@ -327,11 +332,7 @@ Available targets:
   help                                Help screen
   help/all                            Display help for all targets
   help/short                          This help short screen
-  init/aws                            Initialize the project for a specific cloud provider: AWS
-  init/azurerm                        Initialize the project for a specific cloud provider: Azure RM
-  init/gcp                            Initialize the project for a specific cloud provider: GCP
-  init/github                         Initialize the project for a specific cloud provider: Github Provider
-  init/mongodb                        Initialize the project for a specific cloud provider: MongoDB Atlas Provider
+  init/%                              Initialize the project for a specific cloud provider: %S
   lint                                Lint terraform/opentofu code
   tag                                 Tag the current version
 
@@ -341,7 +342,7 @@ Available targets:
 | Name | Version |
 |------|---------|
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
-| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.4 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.35 |
 | <a name="requirement_openai"></a> [openai](#requirement\_openai) | ~> 2.0 |
 
 ## Providers
@@ -376,7 +377,7 @@ Available targets:
 | <a name="input_extra_tags"></a> [extra\_tags](#input\_extra\_tags) | Extra tags to add to the resources | `map(string)` | `{}` | no |
 | <a name="input_is_hub"></a> [is\_hub](#input\_is\_hub) | Is this a hub or spoke configuration? | `bool` | `false` | no |
 | <a name="input_org"></a> [org](#input\_org) | Organization details | <pre>object({<br/>    organization_name = string<br/>    organization_unit = string<br/>    environment_type  = string<br/>    environment_name  = string<br/>  })</pre> | n/a | yes |
-| <a name="input_settings"></a> [settings](#input\_settings) | Settings for OpenAI API key management via service accounts and admin keys | <pre>object({<br/>    projects = optional(map(object({           # (Optional) Map keyed by a logical project name<br/>      project_id = string                      # (Required) The OpenAI project ID (e.g. "proj_xxx")<br/>      service_accounts = optional(map(object({ # (Optional) Map of service accounts keyed by logical name<br/>        name_prefix = optional(string)         # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>        name        = optional(string)         # (Optional) Fixed name for the service account<br/>        secret = optional(object({<br/>          name_prefix = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>          name        = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>          path        = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type><br/>          plain       = optional(bool, false) # (Optional) Store the API key as a plain string instead of JSON {"api_key":"<value>"}. Default: false<br/>          description = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>        }), {})<br/>      })), {})<br/>    })), {})<br/>    admin_keys = optional(map(object({         # (Optional) Map of org-level admin API keys keyed by logical name<br/>      name_prefix = optional(string)           # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>      name        = optional(string)           # (Optional) Fixed name for the admin API key<br/>      scopes      = optional(list(string), []) # (Optional) Permission scopes. Possible values: "users.read", "users.write", "projects.read", "projects.write", "api_keys.read", "api_keys.write", "rate_limits.read", "rate_limits.write"<br/>      expires_at  = optional(number)           # (Optional) Unix timestamp for key expiration<br/>      secret = optional(object({<br/>        name_prefix = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>        name        = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>        path        = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type><br/>        plain       = optional(bool, false) # (Optional) Store the API key as a plain string instead of JSON {"api_key":"<value>"}. Default: false<br/>        description = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>      }), {})<br/>    })), {})<br/>  })</pre> | `{}` | no |
+| <a name="input_settings"></a> [settings](#input\_settings) | Settings for OpenAI API key management via service accounts and admin keys | <pre>object({<br/>    projects = optional(map(object({           # (Optional) Map keyed by a logical project name<br/>      project_id = string                      # (Required) The OpenAI project ID (e.g. "proj_xxx")<br/>      service_accounts = optional(map(object({ # (Optional) Map of service accounts keyed by logical name<br/>        name_prefix = optional(string)         # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>        name        = optional(string)         # (Optional) Fixed name for the service account<br/>        secret = optional(object({<br/>          name_prefix = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>          name        = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>          path        = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type>/<project_key><br/>          plain       = optional(bool, false) # (Optional) Store the API key as a plain string instead of JSON {"api_key":"<value>"}. Default: false<br/>          description = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>        }), {})<br/>      })), {})<br/>    })), {})<br/>    admin_keys = optional(map(object({         # (Optional) Map of org-level admin API keys keyed by logical name<br/>      name_prefix = optional(string)           # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>      name        = optional(string)           # (Optional) Fixed name for the admin API key<br/>      scopes      = optional(list(string), []) # (Optional) Permission scopes. Possible values: "users.read", "users.write", "projects.read", "projects.write", "api_keys.read", "api_keys.write", "rate_limits.read", "rate_limits.write"<br/>      expires_at  = optional(number)           # (Optional) Unix timestamp for key expiration<br/>      secret = optional(object({<br/>        name_prefix = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>        name        = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>        path        = optional(string)      # (Optional) Override the admin secret base path /<org_unit>/<env_name>/<env_type>; final path appends /admin/<secret_name><br/>        plain       = optional(bool, false) # (Optional) Store the API key as a plain string instead of JSON {"api_key":"<value>"}. Default: false<br/>        description = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>      }), {})<br/>    })), {})<br/>  })</pre> | `{}` | no |
 | <a name="input_spoke_def"></a> [spoke\_def](#input\_spoke\_def) | Spoke ID Number, must be a 3 digit number | `string` | `"001"` | no |
 
 ## Outputs
