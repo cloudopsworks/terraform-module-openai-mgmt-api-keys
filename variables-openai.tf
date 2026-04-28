@@ -18,7 +18,7 @@
 #           secret:                  # (Optional) AWS Secrets Manager configuration for storing the API key
 #             name_prefix: "myapp"   # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
 #             name: "fixed-secret"   # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
-#             path: "/custom/path"   # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>
+#             path: "/custom/path"   # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>/<project_key>
 #             plain: false           # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
 #             description: "..."     # (Optional) Human-readable description for the Secrets Manager secret
 #   admin_keys:                      # (Optional) Map of org-level admin API keys keyed by logical name
@@ -30,7 +30,7 @@
 #       secret:                      # (Optional) AWS Secrets Manager configuration for storing the API key
 #         name_prefix: "admin"       # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
 #         name: "fixed-secret"       # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
-#         path: "/custom/path"       # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>
+#         path: "/custom/path"       # (Optional) Admin secret base path. Final path: <path>/admin/<secret_name>. Default base path: /<org_unit>/<env_name>/<env_type>
 #         plain: false               # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
 #         description: "..."         # (Optional) Human-readable description for the Secrets Manager secret
 variable "settings" {
@@ -44,7 +44,7 @@ variable "settings" {
         secret = optional(object({
           name_prefix = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name
           name        = optional(string)      # (Optional) Fixed name for the Secrets Manager secret
-          path        = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type>
+          path        = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type>/<project_key>
           plain       = optional(bool, false) # (Optional) Store the API key as a plain string instead of JSON {"api_key":"<value>"}. Default: false
           description = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret
         }), {})
@@ -58,7 +58,7 @@ variable "settings" {
       secret = optional(object({
         name_prefix = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name
         name        = optional(string)      # (Optional) Fixed name for the Secrets Manager secret
-        path        = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type>
+        path        = optional(string)      # (Optional) Override the admin secret base path /<org_unit>/<env_name>/<env_type>; final path appends /admin/<secret_name>
         plain       = optional(bool, false) # (Optional) Store the API key as a plain string instead of JSON {"api_key":"<value>"}. Default: false
         description = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret
       }), {})

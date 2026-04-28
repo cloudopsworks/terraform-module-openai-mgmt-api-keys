@@ -7,7 +7,9 @@
 #     Distributed Under Apache v2.0 License
 #
 # Stores the OpenAI service account API key in AWS Secrets Manager.
-# Secret path: <secret_path>/openai-api-key/<secret_name>
+# Service account secret path: <secret_store_path>/<project_key>/<secret_name>
+# Admin key secret path: <secret_store_path>/admin/<secret_name>
+# If admin secret.path already ends with /admin, it is normalized to avoid a duplicate path segment.
 # The api_key_value from the service account resource is only available at creation time.
 
 resource "aws_secretsmanager_secret" "this" {

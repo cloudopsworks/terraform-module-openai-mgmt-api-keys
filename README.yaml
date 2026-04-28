@@ -51,8 +51,13 @@ introduction: |-
   | `name_prefix` | `<name_prefix>-<system_name>` where `system_name` encodes org, environment, spoke, and region |
   | `name` | fixed string, used verbatim |
 
-  Secrets Manager secret paths default to `/<org_unit>/<env_name>/<env_type>` and can be
-  overridden per entry with `secret.path`.
+  Secrets Manager secret paths default to:
+
+  - project service accounts: `/<org_unit>/<env_name>/<env_type>/<project_key>`
+  - admin keys: `/<org_unit>/<env_name>/<env_type>/admin`
+
+  Both defaults can be overridden per entry with `secret.path`. For admin keys, the
+  module normalises custom paths so the final secret name always ends with `/admin/<secret_name>`.
 
   ### Secret structure
 
@@ -95,7 +100,7 @@ usage: |-
               secret = {
                 name_prefix = "backend-worker-openai"
                 description = "OpenAI API key for the backend worker service account"
-                # path defaults to /<org_unit>/<env_name>/<env_type>
+                # path defaults to /<org_unit>/<env_name>/<env_type>/backend-services
               }
             }
 
@@ -229,7 +234,7 @@ examples: |-
   ```
 
   The service account is named `myapp-<system_name>` and its API key is stored at
-  `/platform/prod/production/openai-api-key/myapp-<system_name>` as
+  `/platform/prod/production/my-project/myapp-<system_name>` as
   `{"api_key": "sk-..."}`.
 
   ---
