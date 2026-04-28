@@ -8,8 +8,8 @@
 #
 # Stores the OpenAI service account API key in AWS Secrets Manager.
 # Service account secret path: <secret_store_path>/<project_key>/<secret_name>
-# Admin key secret path: <secret_store_path>/admin/<secret_name>
-# If admin secret.path already ends with /admin, it is normalized to avoid a duplicate path segment.
+# Admin key secret path defaults to <secret_store_path>/admin/<secret_name>.
+# If admin secret.path is set, it is used verbatim as the full parent path for <secret_name>.
 # The api_key_value from the service account resource is only available at creation time.
 
 resource "aws_secretsmanager_secret" "this" {
@@ -30,7 +30,7 @@ resource "aws_secretsmanager_secret_version" "this" {
 
 resource "aws_secretsmanager_secret" "admin_key" {
   for_each = local.admin_keys
-  name     = "${local.admin_secret_paths[each.key]}/admin/${local.admin_secret_names[each.key]}"
+  name     = "${local.admin_secret_paths[each.key]}/${local.admin_secret_names[each.key]}"
   tags     = local.all_tags
 }
 
