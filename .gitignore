@@ -37,3 +37,7 @@ provider.temp.tf
 # AI excludes
 .claude/
 .ai/
+.omc/
+.omx/
+.gstack/
+.opencode/

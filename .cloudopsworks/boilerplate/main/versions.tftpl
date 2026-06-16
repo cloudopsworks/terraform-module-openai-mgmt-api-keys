@@ -15,3 +15,6 @@
 {{- if eq .provider "mongodb" }}
 {{ template "mongodb_versions" . }}
 {{- end }}
+{{- if eq .provider "hoop" }}
+{{ template "hoop_versions" . }}
+{{- end }}
