@@ -19,6 +19,7 @@ variables:
       - "gcp"
       - "mongodb"
       - "github"
+      - "hoop"
 
 dependencies:
   - name: aws

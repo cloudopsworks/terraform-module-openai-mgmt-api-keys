@@ -48,8 +48,7 @@ else ifeq ($(PROVIDER),aws)
 else ifeq ($(PROVIDER),azurerm)
 	echo "$$PROVIDER_CHOMP_AZURERM" > provider.temp.tf
 else
-	@echo "No valid provider specified. Please set the PROVIDER variable to 'aws' or 'gcp'."
-	@exit 1
+	@echo "Provider not supporting Provider Chomps, skipping..."
 endif
 
 ## Lint terraform/opentofu code

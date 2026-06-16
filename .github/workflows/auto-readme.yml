@@ -30,6 +30,9 @@ jobs:
     steps:
       - name: checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 1
       - name: readme/update
         shell: bash
         env:
@@ -52,3 +55,12 @@ jobs:
             using the [`cloudopsworks/tronador`](https://github.com/cloudopsworks/tronador).
           branch: feature/auto-readme
           #branch-suffix: none
+      # Push the code into PR if we are in a pull request event
+      - name: Push changes
+        if: (github.event_name == 'pull_request')
+        run: |
+          git config --global user.name "${{ github.actor }}"
+          git config --global user.email "${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com"
+          git add README.md docs/
+          git commit -m "Updated README.md" || echo "No changes to commit"
+          git push origin HEAD:${{ github.head_ref }} || echo "No changes to push"
