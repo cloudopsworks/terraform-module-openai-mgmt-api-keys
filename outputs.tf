@@ -10,7 +10,14 @@
 output "service_account_ids" {
   description = "Map of OpenAI service account IDs keyed by '<project_key>/<service_account_key>'"
   value = {
-    for k, v in openai_project_service_account.this : k => v.service_account_id
+    for k, v in openai_service_account.this : k => v.id
+  }
+}
+
+output "service_account_api_key_ids" {
+  description = "Map of OpenAI API key IDs created alongside each service account, keyed by '<project_key>/<service_account_key>'"
+  value = {
+    for k, v in openai_service_account.this : k => v.api_key_id
   }
 }
 

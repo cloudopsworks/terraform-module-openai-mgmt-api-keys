@@ -16,8 +16,8 @@ terraform {
       version = "~> 6.35"
     }
     openai = {
-      source  = "mkdev-me/openai"
-      version = "~> 2.0"
+      source  = "cloudopsworks/openai"
+      version = "~> 0.1"
     }
   }
 }

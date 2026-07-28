@@ -19,6 +19,8 @@ locals {
           project_id  = proj.project_id
           name_prefix = try(sa.name_prefix, null)
           name        = try(sa.name, null)
+          role        = try(sa.role, null)
+          scopes      = try(sa.scopes, null)
           secret      = try(sa.secret, {})
         }
       ]
