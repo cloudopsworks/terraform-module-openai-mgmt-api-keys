@@ -17,7 +17,6 @@ locals {
   openai_secret_sts_endpoint = local.global_vars.openai.secrets.sts_endpoint
   openai_organization_id     = local.global_vars.openai.organization_id
   openai_secret_api_key      = local.global_vars.openai.secrets.secret_key
-  openai_admin_key           = run_cmd("--terragrunt-quiet", "${get_parent_terragrunt_dir()}/.cloudopsworks/hooks/get-secret.sh", local.openai_secret_name, local.openai_secret_api_key, local.openai_secret_region, local.openai_secret_sts_role_arn, local.openai_secret_sts_endpoint)
 
   tags = merge(
     local.global_tags,
@@ -37,19 +36,19 @@ generate "provider-openai" {
   if_exists = "overwrite_terragrunt"
   contents  = <<EOF
 provider "openai" {
-  organization = "${local.openai_organization_id}"
+  organization_id = "${local.openai_organization_id}"
+  aws_secrets_manager = {
+    region    = "${local.openai_secret_region}"
+    secret_id = "${local.openai_secret_name}"
+    role_arn  = "${local.openai_secret_sts_role_arn}"
+    json_key  = "${local.openai_secret_api_key}"
+  }
 }
 EOF
 }
 
 terraform {
   source = "{{ .sourceUrl }}"
-  extra_arguments "openai_api_key" {
-    commands = ["plan", "apply", "destroy", "import"]
-    env_vars = {
-      "OPENAI_ADMIN_KEY" = local.openai_admin_key
-    }
-  }
 }
 
 inputs = {
