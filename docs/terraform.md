@@ -10,8 +10,8 @@
 
 | Name | Version |
 |------|---------|
-| <a name="provider_aws"></a> [aws](#provider\_aws) | 6.56.0 |
-| <a name="provider_openai"></a> [openai](#provider\_openai) | 0.1.0 |
+| <a name="provider_aws"></a> [aws](#provider\_aws) | ~> 6.35 |
+| <a name="provider_openai"></a> [openai](#provider\_openai) | ~> 0.1 |
 
 ## Modules
 
