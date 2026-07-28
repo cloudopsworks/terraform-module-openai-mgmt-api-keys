@@ -22,10 +22,19 @@ resource "aws_secretsmanager_secret_version" "this" {
   for_each  = local.service_accounts
   secret_id = aws_secretsmanager_secret.this[each.key].id
   secret_string = local.secret_plain[each.key] ? (
-    openai_project_service_account.this[each.key].api_key_value
+    openai_service_account.this[each.key].api_key_value
     ) : (
-    jsonencode({ api_key = openai_project_service_account.this[each.key].api_key_value })
+    jsonencode({ api_key = openai_service_account.this[each.key].api_key_value })
   )
+
+  lifecycle {
+    ignore_changes = [
+      secret_string, # Ignore changes to the secret string after creation]
+    ]
+    replace_triggered_by = [
+      openai_service_account.this[each.key]
+    ]
+  }
 }
 
 resource "aws_secretsmanager_secret" "admin_key" {
@@ -38,8 +47,17 @@ resource "aws_secretsmanager_secret_version" "admin_key" {
   for_each  = local.admin_keys
   secret_id = aws_secretsmanager_secret.admin_key[each.key].id
   secret_string = local.admin_secret_plain[each.key] ? (
-    openai_admin_api_key.this[each.key].api_key_value
+    openai_admin_api_key.this[each.key].value
     ) : (
-    jsonencode({ api_key = openai_admin_api_key.this[each.key].api_key_value })
+    jsonencode({ api_key = openai_admin_api_key.this[each.key].value })
   )
+  lifecycle {
+    ignore_changes = [
+      secret_string, # Ignore changes to the secret string after creation
+    ]
+    replace_triggered_by = [
+      openai_admin_api_key.this[each.key]
+    ]
+  }
+
 }
