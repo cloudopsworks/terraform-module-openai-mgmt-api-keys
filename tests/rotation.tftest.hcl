@@ -69,8 +69,9 @@ run "module_lambda_rotates_both_families" {
 
   variables {
     settings = {
-      rotation_lambda      = "arn:aws:lambda:us-east-1:123456789012:function:rotate-openai"
-      rotation_period_days = 45
+      rotation_lambda       = "arn:aws:lambda:us-east-1:123456789012:function:rotate-openai"
+      rotation_period_days  = 45
+      rotation_window_hours = 3
       projects = {
         engineering = {
           project_id = "proj_engineering"
@@ -97,8 +98,10 @@ run "module_lambda_rotates_both_families" {
       length(aws_secretsmanager_secret_version.admin_rotation_config) == 1 &&
       length(aws_secretsmanager_secret_rotation.this) == 1 &&
       length(aws_secretsmanager_secret_rotation.admin_key) == 1 &&
-      aws_secretsmanager_secret_rotation.this["engineering/backend"].rotation_rules[0].automatically_after_days == 45 &&
-      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].automatically_after_days == 45 &&
+      aws_secretsmanager_secret_rotation.this["engineering/backend"].rotation_rules[0].schedule_expression == "rate(45 days)" &&
+      aws_secretsmanager_secret_rotation.this["engineering/backend"].rotation_rules[0].duration == "3h" &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].schedule_expression == "rate(45 days)" &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].duration == "3h" &&
       length(data.aws_lambda_function.rotation) == 0
     )
     error_message = "A module-wide Lambda must enroll both key families using one interval."
@@ -120,11 +123,178 @@ run "default_period_and_lambda_name_lookup" {
   assert {
     condition = (
       length(data.aws_lambda_function.rotation) == 1 &&
-      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].automatically_after_days == 30 &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].schedule_expression == "rate(30 days)" &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].duration == null &&
       aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_lambda_arn == data.aws_lambda_function.rotation[0].arn
     )
-    error_message = "A Lambda name must resolve through data lookup and use the 30-day default."
+    error_message = "A Lambda name must resolve through data lookup and use a 30-day rate with no explicit duration."
   }
+}
+
+run "one_day_rate_is_singular" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_lambda      = "rotate-openai"
+      rotation_period_days = 1
+      admin_keys           = { operations = { name = "operations" } }
+    }
+  }
+
+  assert {
+    condition     = aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].schedule_expression == "rate(1 day)"
+    error_message = "A one-day rate must use the singular day unit."
+  }
+}
+
+run "legacy_1000_days_remains_valid_without_a_window" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_lambda      = "rotate-openai"
+      rotation_period_days = 1000
+      admin_keys           = { operations = { name = "operations" } }
+    }
+  }
+
+  assert {
+    condition = (
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].automatically_after_days == 1000 &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].schedule_expression == null &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].duration == null
+    )
+    error_message = "The 1000-day legacy rule must not send a rate expression or duration."
+  }
+}
+
+run "legacy_1000_days_rejects_explicit_window" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_period_days  = 1000
+      rotation_window_hours = 1
+    }
+  }
+
+  expect_failures = [var.settings]
+}
+
+run "cron_overrides_rate_and_retains_explicit_expiry" {
+  command = apply
+
+  variables {
+    settings = {
+      rotation_lambda          = "rotate-openai"
+      rotation_period_days     = 45
+      rotation_window_hours    = 2
+      rotation_cron_expression = "cron(0  22 1 * ? *)"
+      projects = {
+        engineering = {
+          project_id = "proj_engineering"
+          service_accounts = {
+            backend   = { name = "backend", expires_in_seconds = 3456000 }
+            opted_out = { name = "opted-out", secret = { rotation_enabled = false } }
+          }
+        }
+      }
+      admin_keys = {
+        operations = { name = "operations", expire_in_days = 40 }
+      }
+    }
+  }
+
+  assert {
+    condition = (
+      length(aws_secretsmanager_secret_rotation.this) == 1 &&
+      aws_secretsmanager_secret_rotation.this["engineering/backend"].rotation_rules[0].schedule_expression == "cron(0 22 1 * ? *)" &&
+      aws_secretsmanager_secret_rotation.this["engineering/backend"].rotation_rules[0].duration == "2h" &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].schedule_expression == "cron(0 22 1 * ? *)" &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].duration == "2h" &&
+      jsondecode(aws_secretsmanager_secret_version.rotation_config["engineering/backend"].secret_string).expires_in_seconds == 3456000 &&
+      jsondecode(aws_secretsmanager_secret_version.admin_rotation_config["operations"].secret_string).expires_in_seconds == 3456000
+    )
+    error_message = "Cron must override the rate for both credential families, with explicit expiry in TFCONFIG and no rotation for opted-out keys."
+  }
+}
+
+run "cron_requires_expiry_for_enrolled_admin_keys" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_lambda          = "rotate-openai"
+      rotation_cron_expression = "cron(0 3 1 * ? *)"
+      admin_keys               = { operations = { name = "operations" } }
+    }
+  }
+
+  expect_failures = [var.settings]
+}
+
+run "cron_accepts_null_window" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_lambda          = "rotate-openai"
+      rotation_window_hours    = null
+      rotation_cron_expression = "cron(0 23 1 * ? *)"
+      admin_keys               = { operations = { name = "operations", expire_in_days = 40 } }
+    }
+  }
+
+  assert {
+    condition = (
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].schedule_expression == "cron(0 23 1 * ? *)" &&
+      aws_secretsmanager_secret_rotation.admin_key["operations"].rotation_rules[0].duration == null
+    )
+    error_message = "An explicit null duration must leave AWS to choose the cron window duration."
+  }
+}
+
+run "cron_requires_expiry_for_enrolled_project_keys" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_lambda          = "rotate-openai"
+      rotation_cron_expression = "cron(0 3 1 * ? *)"
+      projects = {
+        engineering = {
+          project_id       = "proj_engineering"
+          service_accounts = { backend = { name = "backend" } }
+        }
+      }
+    }
+  }
+
+  expect_failures = [var.settings]
+}
+
+run "cron_rejects_window_past_midnight" {
+  command = plan
+
+  variables {
+    settings = {
+      rotation_window_hours    = 2
+      rotation_cron_expression = "cron(0 23 1 * ? *)"
+    }
+  }
+
+  expect_failures = [var.settings]
+}
+
+run "rotation_window_must_be_whole_hours" {
+  command = plan
+
+  variables {
+    settings = { rotation_window_hours = 1.5 }
+  }
+
+  expect_failures = [var.settings]
 }
 
 run "per_key_opt_out_is_terraform_owned" {

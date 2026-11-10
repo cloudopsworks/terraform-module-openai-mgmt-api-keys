@@ -9,7 +9,9 @@
 
 # settings:                             # (Optional) Settings for OpenAI API key management. Default: {}
 #   rotation_lambda: "rotate-openai"    # (Optional) Module-wide rotation Lambda name or ARN. Default: null (rotation disabled)
-#   rotation_period_days: 30            # (Optional) Shared rotation interval, whole days from 1 through 1000. Default: 30
+#   rotation_period_days: 30            # (Optional) Whole days, 1-999 for rate; 1000 only with no explicit window. Default: 30
+#   rotation_window_hours: 1            # (Optional) Window length in hours, 1-23. Default: null (AWS default)
+#   rotation_cron_expression: null      # (Optional) AWS cron with one UTC start hour; overrides the rate interval
 #   projects:                           # (Optional) Map of OpenAI projects keyed by a logical name
 #     my-project:                       # Logical key used to identify the project (not the OpenAI project ID)
 #       project_id: "proj_xxx"          # (Required) The OpenAI project ID
@@ -19,6 +21,7 @@
 #           name: "fixed-name"          # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
 #           role: "member"              # (Optional) Project role for the service account. Values: "member", "owner". Default: "member"
 #           scopes:                     # (Optional) Project-key scopes. Default: null; [] is not "no access". Lambda owns all rotating keys
+#           expires_in_seconds: 3456000 # (Optional) Rotating project key TTL in seconds; required with cron
 #             - "api.model.request"     #            With rotation, later changes update TFCONFIG without replacing the account
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
@@ -44,15 +47,18 @@
 variable "settings" {
   description = "Settings for OpenAI API key management via service accounts and admin keys"
   type = object({
-    rotation_lambda      = optional(string)     # (Optional) Lambda function name or ARN; null disables rotation
-    rotation_period_days = optional(number, 30) # (Optional) Shared whole-day interval from 1 through 1000. Default: 30
-    projects = optional(map(object({            # (Optional) Map keyed by a logical project name
-      project_id = string                       # (Required) The OpenAI project ID (e.g. "proj_xxx")
-      service_accounts = optional(map(object({  # (Optional) Map of service accounts keyed by logical name
-        name_prefix = optional(string)          # (Optional) Name prefix composed as name_prefix + "-" + system_name
-        name        = optional(string)          # (Optional) Fixed name for the service account
-        role        = optional(string)          # (Optional) Project role for the service account. Possible values: "member", "owner". Default: "member"
-        scopes      = optional(set(string))     # (Optional) Project-key scopes. Default: null; changes replace the account only without rotation, otherwise update TFCONFIG
+    rotation_lambda          = optional(string)     # (Optional) Lambda function name or ARN; null disables rotation
+    rotation_period_days     = optional(number, 30) # (Optional) Whole days, 1-999 for rate; 1000 uses legacy scheduling without an explicit window
+    rotation_window_hours    = optional(number)     # (Optional) Window length in whole hours, 1-23. Null uses the AWS default
+    rotation_cron_expression = optional(string)     # (Optional) AWS cron with one UTC start hour; overrides the rate interval
+    projects = optional(map(object({                # (Optional) Map keyed by a logical project name
+      project_id = string                           # (Required) The OpenAI project ID (e.g. "proj_xxx")
+      service_accounts = optional(map(object({      # (Optional) Map of service accounts keyed by logical name
+        name_prefix        = optional(string)       # (Optional) Name prefix composed as name_prefix + "-" + system_name
+        name               = optional(string)       # (Optional) Fixed name for the service account
+        role               = optional(string)       # (Optional) Project role for the service account. Possible values: "member", "owner". Default: "member"
+        scopes             = optional(set(string))  # (Optional) Project-key scopes. Default: null; changes replace the account only without rotation, otherwise update TFCONFIG
+        expires_in_seconds = optional(number)       # (Optional) Relative TTL for Lambda-owned project keys; null derives it from a rate schedule
         secret = optional(object({
           name_prefix      = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name
           name             = optional(string)      # (Optional) Fixed name for the Secrets Manager secret
@@ -159,6 +165,64 @@ variable "settings" {
       var.settings.rotation_period_days == floor(var.settings.rotation_period_days)
     )
     error_message = "settings.rotation_period_days must be a whole number from 1 through 1000."
+  }
+
+  validation {
+    condition = (
+      var.settings.rotation_cron_expression != null ||
+      var.settings.rotation_period_days != 1000 ||
+      var.settings.rotation_window_hours == null
+    )
+    error_message = "A custom rotation window with a day rate requires rotation_period_days from 1 through 999; omit rotation_window_hours to retain the legacy 1000-day schedule."
+  }
+
+  validation {
+    condition = var.settings.rotation_window_hours == null ? true : (
+      var.settings.rotation_window_hours >= 1 &&
+      var.settings.rotation_window_hours <= 23 &&
+      var.settings.rotation_window_hours == floor(var.settings.rotation_window_hours)
+    )
+    error_message = "settings.rotation_window_hours must be a whole number from 1 through 23."
+  }
+
+  validation {
+    # AWS validates the calendar fields; the module checks the UTC window.
+    condition = var.settings.rotation_cron_expression == null ? true : try(
+      tonumber(regex("^cron\\(0\\s+([01]?[0-9]|2[0-3])\\s+[^\\s()]+\\s+[^\\s()]+\\s+[^\\s()]+\\s+[^\\s()]+\\)$", trimspace(var.settings.rotation_cron_expression))[0]) +
+      coalesce(var.settings.rotation_window_hours, 0) <= 24,
+      false
+    )
+    error_message = "settings.rotation_cron_expression must use AWS cron(0 H DOM MON DOW YEAR) with a single UTC hour (0-23) and the window must end by 24:00 UTC."
+  }
+
+  validation {
+    condition = alltrue(flatten([
+      for project in values(var.settings.projects) : [
+        for account in values(project.service_accounts) :
+        account.expires_in_seconds == null ? true : (
+          var.settings.rotation_lambda != null && account.secret.rotation_enabled &&
+          account.expires_in_seconds >= 1 && account.expires_in_seconds <= 31536000 &&
+          account.expires_in_seconds == floor(account.expires_in_seconds)
+        )
+      ]
+    ]))
+    error_message = "Each project expires_in_seconds may be set only for a rotating service account and must be a whole number from 1 through 31536000."
+  }
+
+  validation {
+    condition = var.settings.rotation_lambda == null || var.settings.rotation_cron_expression == null ? true : alltrue(concat(
+      flatten([
+        for project in values(var.settings.projects) : [
+          for account in values(project.service_accounts) :
+          !account.secret.rotation_enabled || account.expires_in_seconds != null
+        ]
+      ]),
+      [
+        for key in values(var.settings.admin_keys) :
+        !key.secret.rotation_enabled || key.expires_in_seconds != null || key.expire_in_hours != null || key.expire_in_days != null
+      ]
+    ))
+    error_message = "A cron rotation schedule requires explicit expiry for each enrolled project or admin key."
   }
 
   validation {

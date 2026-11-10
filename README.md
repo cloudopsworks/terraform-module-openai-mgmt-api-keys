@@ -69,8 +69,8 @@ This module manages OpenAI credential infrastructure on AWS:
    rotating `AWSPENDING` and `AWSCURRENT` versions.
 
 4. **Optional rotation** — `settings.rotation_lambda` selects one Lambda by function name
-   or ARN for every enrolled key. `settings.rotation_period_days` is shared across all
-   enrollments (default: 30, allowed: 1-1000). `secret.rotation_enabled = false` opts an
+   or ARN for every enrolled key. The default schedule is every 30 days with
+   the AWS default window starting at 00:00 UTC. `secret.rotation_enabled = false` opts an
    individual key out when necessary, but is **not recommended**. Without a Lambda, all
    keys remain Terraform-owned and no rotation schedules are created.
 
@@ -79,6 +79,27 @@ This module manages OpenAI credential infrastructure on AWS:
 > a Lambda supporting keyless project bootstrap **before** applying this module change.
 > Releases prior to `v2.0.0` targeted the `mkdev-me/openai` provider and the
 > `openai_project_service_account` resource — see [Breaking changes in v2.0.0](#breaking-changes-in-v200).
+
+### Rotation schedule and window
+
+Set `settings.rotation_period_days` for a whole-day rate, or override it with an
+AWS `settings.rotation_cron_expression` such as `cron(0 3 1 * ? *)` (03:00 UTC
+on the first of each month). Cron must use minute zero and a single numeric
+UTC hour. Set `settings.rotation_window_hours` (1–23) to control the window
+length. Omit it or set it to null to use the AWS default; for day-based
+schedules the default window ends at the end of the UTC day. An explicit
+window must end by 24:00 UTC. AWS can start rotation at any point inside the
+window. Set a shorter duration if you need predictable hours for decommissioning.
+
+Rate schedules support 1–999 days. The legacy 1000-day AWS schedule is kept
+only when no cron or explicit window is set. Keep intervals within the OpenAI
+key lifetime limit. With cron,
+every enrolled key needs an explicit expiry because the Lambda cannot derive
+a lifetime from cron. Set `expires_in_seconds` for project keys and one of
+the relative expiry fields for admin keys. Allow for the longest gap between
+rotations plus the window and an operational buffer. Review the schedule
+change as a live rotation change: applying the association can trigger a
+rotation outside the scheduled window.
 
 ### Naming convention
 
@@ -144,9 +165,10 @@ A rotating secret has a separately versioned `TFCONFIG` payload:
 
 For admin keys, `key_type` is `"admin"`, `project_id`, `service_account_id`,
 `scopes`, and `role` are `null`, and `expires_in_seconds` is the configured
-relative expiry normalized from seconds, hours, or days. Omission means no
-expiration. For project keys, `expires_in_seconds` is currently `null`; the
-module does not expose project-key TTL. `scopes = null` means the module has
+relative expiry normalized from seconds, hours, or days. For project keys,
+`expires_in_seconds` is the optional relative TTL configured on the service
+account. For both rotating key types, null derives a finite expiry from the
+rate schedule. `scopes = null` means the module has
 not requested a restriction; do **not** interpret an empty scope list as no
 permissions. Read `TFCONFIG` by staging label, not by default `AWSCURRENT`.
 
@@ -280,8 +302,9 @@ all entries at once; inspect each key's plan and preserve a rollback path.
 
 **Decommissioning a rotating key is also coordinated work.** Removing an
 enrolled admin entry or AWS secret does not revoke the Lambda-owned OpenAI
-key: Terraform has no admin-key resource for that entry. First stop rotation,
-move consumers to a replacement, and use the independent management credential
+key: Terraform has no admin-key resource for that entry. Decommission outside
+the configured rotation window, with no rotation in flight or manually
+triggered during teardown. Move consumers to a replacement and use the independent management credential
 to revoke the active key plus any pending or orphan keys. Verify that revocation
 and consumer cutover before removing the secret and `TFCONFIG`. For project
 keys, decide explicitly whether the service-account identity is also being
@@ -341,7 +364,9 @@ Scaffolding produces the annotated `inputs.yaml` below. Every key mirrors
 # Module configuration
 # settings:                             # (Optional) Settings for OpenAI API key management. Default: {}
 #   rotation_lambda: "rotate-openai"    # (Optional) Module-wide Lambda function name or ARN. Default: null (rotation disabled)
-#   rotation_period_days: 30            # (Optional) Shared rotation period, whole days 1-1000. Default: 30
+#   rotation_period_days: 30            # (Optional) Whole days, 1-999 for rate; 1000 only with no explicit window. Default: 30
+#   rotation_window_hours: 1            # (Optional) Rotation window in whole hours, 1-23. Default: null (AWS default)
+#   rotation_cron_expression: "cron(0 3 1 * ? *)" # (Optional) AWS cron with one UTC start hour; overrides the rate
 #   projects:                           # (Optional) Map of OpenAI projects keyed by a logical name. Default: {}
 #     my-project:                       # Logical key used to identify the project (not the OpenAI project ID)
 #       project_id: "proj_xxx"          # (Required) The OpenAI project ID
@@ -352,6 +377,7 @@ Scaffolding produces the annotated `inputs.yaml` below. Every key mirrors
 #           role: "member"              # (Optional) Project role for the service account. Valid values: "member", "owner". Default: "member"
 #           scopes:                     # (Optional) Project-key scopes. Without rotation: provider bootstrap; with rotation: Lambda-created keys. Default: null
 #             - "api.model.request"     #            With rotation, later scope changes update TFCONFIG without replacing the account
+#           expires_in_seconds: 3456000 # (Optional) Rotating project key TTL in seconds; required with cron
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
 #             name: "fixed-secret"      # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
@@ -514,7 +540,9 @@ inputs = {
 | `is_hub` | `bool` | no | Hub or spoke configuration. Default: `false` |
 | `extra_tags` | `map(string)` | no | Additional tags merged onto all resources. Default: `{}` |
 | `settings.rotation_lambda` | `string` | no | Module-wide Lambda function name or ARN. Default: `null` (rotation disabled) |
-| `settings.rotation_period_days` | `number` | no | Shared whole-day rotation interval, 1-1000. Default: `30` |
+| `settings.rotation_period_days` | `number` | no | Whole-day rate interval, 1-999; 1000 retains legacy scheduling without a custom window. Default: `30` |
+| `settings.rotation_window_hours` | `number` | no | Window length in whole hours, 1-23. Default: `null` (AWS default) |
+| `settings.rotation_cron_expression` | `string` | no | AWS cron with minute zero and one numeric UTC hour; overrides the rate interval |
 | `settings.projects` | `map(object)` | no | Map of OpenAI projects keyed by logical name. Default: `{}` |
 | `settings.admin_keys` | `map(object)` | no | Map of org-level admin API keys keyed by logical name. Default: `{}` |
 
@@ -536,6 +564,7 @@ hierarchy — only `settings` belongs in `inputs.yaml`.
 | `name` | `string` | no* | Fixed verbatim name for the service account |
 | `role` | `string` | no | Project role. Possible values: `member`, `owner`. Default: `member` |
 | `scopes` | `set(string)` | no | Project-key scopes (e.g. `api.model.request`). Without rotation, changes replace the account; with rotation, `TFCONFIG` changes but the account remains. Default: `null` (provider default) |
+| `expires_in_seconds` | `number` | no | Rotating project key TTL, 1–31536000 seconds. Required with cron; otherwise defaults to a derived finite TTL |
 | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to service account naming |
 | `secret.name` | `string` | no | Fixed verbatim secret name |
 | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>/<project_key>` |
@@ -831,7 +860,7 @@ Available targets:
 | <a name="input_extra_tags"></a> [extra\_tags](#input\_extra\_tags) | Extra tags to add to the resources | `map(string)` | `{}` | no |
 | <a name="input_is_hub"></a> [is\_hub](#input\_is\_hub) | Is this a hub or spoke configuration? | `bool` | `false` | no |
 | <a name="input_org"></a> [org](#input\_org) | Organization details | <pre>object({<br/>    organization_name = string<br/>    organization_unit = string<br/>    environment_type  = string<br/>    environment_name  = string<br/>  })</pre> | n/a | yes |
-| <a name="input_settings"></a> [settings](#input\_settings) | Settings for OpenAI API key management via service accounts and admin keys | <pre>object({<br/>    rotation_lambda      = optional(string)     # (Optional) Lambda function name or ARN; null disables rotation<br/>    rotation_period_days = optional(number, 30) # (Optional) Shared whole-day interval from 1 through 1000. Default: 30<br/>    projects = optional(map(object({            # (Optional) Map keyed by a logical project name<br/>      project_id = string                       # (Required) The OpenAI project ID (e.g. "proj_xxx")<br/>      service_accounts = optional(map(object({  # (Optional) Map of service accounts keyed by logical name<br/>        name_prefix = optional(string)          # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>        name        = optional(string)          # (Optional) Fixed name for the service account<br/>        role        = optional(string)          # (Optional) Project role for the service account. Possible values: "member", "owner". Default: "member"<br/>        scopes      = optional(set(string))     # (Optional) Project-key scopes. Default: null; changes replace the account only without rotation, otherwise update TFCONFIG<br/>        secret = optional(object({<br/>          name_prefix      = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>          name             = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>          path             = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type>/<project_key><br/>          plain            = optional(bool, false) # (Optional, deprecated) Must be false; credentials are structured JSON<br/>          description      = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>          rotation_enabled = optional(bool, true)  # (Optional) Enroll in module-wide rotation. Default: true; false opts out (not recommended)<br/>        }), {})<br/>      })), {})<br/>    })), {})<br/>    admin_keys = optional(map(object({      # (Optional) Map of org-level admin API keys keyed by logical name<br/>      name_prefix        = optional(string) # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>      name               = optional(string) # (Optional) Fixed name for the admin API key<br/>      expires_in_seconds = optional(number) # (Optional) Seconds until the admin key expires. Mutually exclusive with expire_in_hours and expire_in_days. Default: null (non-expiring)<br/>      expire_in_hours    = optional(number) # (Optional) Hours until the admin key expires. Mutually exclusive with expires_in_seconds and expire_in_days. Default: null (non-expiring)<br/>      expire_in_days     = optional(number) # (Optional) Days until the admin key expires. Mutually exclusive with expires_in_seconds and expire_in_hours. Default: null (non-expiring)<br/>      secret = optional(object({<br/>        name_prefix      = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>        name             = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>        path             = optional(string)      # (Optional) Override the full admin secret parent path. Default: /<org_unit>/<env_name>/<env_type>/admin<br/>        plain            = optional(bool, false) # (Optional, deprecated) Must be false; credentials are structured JSON<br/>        description      = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>        rotation_enabled = optional(bool, true)  # (Optional) Enroll in module-wide rotation. Default: true; false opts out (not recommended)<br/>      }), {})<br/>    })), {})<br/>  })</pre> | `{}` | no |
+| <a name="input_settings"></a> [settings](#input\_settings) | Settings for OpenAI API key management via service accounts and admin keys | <pre>object({<br/>    rotation_lambda          = optional(string)     # (Optional) Lambda function name or ARN; null disables rotation<br/>    rotation_period_days     = optional(number, 30) # (Optional) Whole days, 1-999 for rate; 1000 uses legacy scheduling without an explicit window<br/>    rotation_window_hours    = optional(number)     # (Optional) Window length in whole hours, 1-23. Null uses the AWS default<br/>    rotation_cron_expression = optional(string)     # (Optional) AWS cron with one UTC start hour; overrides the rate interval<br/>    projects = optional(map(object({                # (Optional) Map keyed by a logical project name<br/>      project_id = string                           # (Required) The OpenAI project ID (e.g. "proj_xxx")<br/>      service_accounts = optional(map(object({      # (Optional) Map of service accounts keyed by logical name<br/>        name_prefix        = optional(string)       # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>        name               = optional(string)       # (Optional) Fixed name for the service account<br/>        role               = optional(string)       # (Optional) Project role for the service account. Possible values: "member", "owner". Default: "member"<br/>        scopes             = optional(set(string))  # (Optional) Project-key scopes. Default: null; changes replace the account only without rotation, otherwise update TFCONFIG<br/>        expires_in_seconds = optional(number)       # (Optional) Relative TTL for Lambda-owned project keys; null derives it from a rate schedule<br/>        secret = optional(object({<br/>          name_prefix      = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>          name             = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>          path             = optional(string)      # (Optional) Override the default secret path /<org_unit>/<env_name>/<env_type>/<project_key><br/>          plain            = optional(bool, false) # (Optional, deprecated) Must be false; credentials are structured JSON<br/>          description      = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>          rotation_enabled = optional(bool, true)  # (Optional) Enroll in module-wide rotation. Default: true; false opts out (not recommended)<br/>        }), {})<br/>      })), {})<br/>    })), {})<br/>    admin_keys = optional(map(object({      # (Optional) Map of org-level admin API keys keyed by logical name<br/>      name_prefix        = optional(string) # (Optional) Name prefix composed as name_prefix + "-" + system_name<br/>      name               = optional(string) # (Optional) Fixed name for the admin API key<br/>      expires_in_seconds = optional(number) # (Optional) Seconds until the admin key expires. Mutually exclusive with expire_in_hours and expire_in_days. Default: null (non-expiring)<br/>      expire_in_hours    = optional(number) # (Optional) Hours until the admin key expires. Mutually exclusive with expires_in_seconds and expire_in_days. Default: null (non-expiring)<br/>      expire_in_days     = optional(number) # (Optional) Days until the admin key expires. Mutually exclusive with expires_in_seconds and expire_in_hours. Default: null (non-expiring)<br/>      secret = optional(object({<br/>        name_prefix      = optional(string)      # (Optional) Secret name prefix composed as name_prefix + "-" + system_name<br/>        name             = optional(string)      # (Optional) Fixed name for the Secrets Manager secret<br/>        path             = optional(string)      # (Optional) Override the full admin secret parent path. Default: /<org_unit>/<env_name>/<env_type>/admin<br/>        plain            = optional(bool, false) # (Optional, deprecated) Must be false; credentials are structured JSON<br/>        description      = optional(string)      # (Optional) Human-readable description for the Secrets Manager secret<br/>        rotation_enabled = optional(bool, true)  # (Optional) Enroll in module-wide rotation. Default: true; false opts out (not recommended)<br/>      }), {})<br/>    })), {})<br/>  })</pre> | `{}` | no |
 | <a name="input_spoke_def"></a> [spoke\_def](#input\_spoke\_def) | Spoke ID Number, must be a 3 digit number | `string` | `"001"` | no |
 
 ## Outputs

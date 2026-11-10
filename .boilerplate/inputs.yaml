@@ -1,7 +1,9 @@
 # Module configuration
 # settings:                             # (Optional) Settings for OpenAI API key management. Default: {}
 #   rotation_lambda: "rotate-openai"    # (Optional) Module-wide Lambda function name or ARN. Default: null (rotation disabled)
-#   rotation_period_days: 30            # (Optional) Shared rotation period, whole days 1-1000. Default: 30
+#   rotation_period_days: 30            # (Optional) Whole days, 1-999 for rate; 1000 only with no explicit window. Default: 30
+#   rotation_window_hours: 1            # (Optional) Rotation window in whole hours, 1-23. Default: null (AWS default)
+#   rotation_cron_expression: "cron(0 3 1 * ? *)" # (Optional) AWS cron with one UTC start hour; overrides the rate
 #   projects:                           # (Optional) Map of OpenAI projects keyed by a logical name. Default: {}
 #     my-project:                       # Logical key used to identify the project (not the OpenAI project ID)
 #       project_id: "proj_xxx"          # (Required) The OpenAI project ID
@@ -12,6 +14,7 @@
 #           role: "member"              # (Optional) Project role for the service account. Valid values: "member", "owner". Default: "member"
 #           scopes:                     # (Optional) Project-key scopes. Without rotation: provider bootstrap; with rotation: Lambda-created keys. Default: null
 #             - "api.model.request"     #            With rotation, later scope changes update TFCONFIG without replacing the account
+#           expires_in_seconds: 3456000 # (Optional) Rotating project key TTL in seconds; required with cron
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
 #             name: "fixed-secret"      # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)

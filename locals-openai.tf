@@ -8,20 +8,29 @@
 #
 
 locals {
+  rotation_uses_legacy_interval = var.settings.rotation_cron_expression == null && var.settings.rotation_period_days == 1000
+  rotation_schedule_expression = (
+    var.settings.rotation_cron_expression != null ? join(" ", regexall("\\S+", var.settings.rotation_cron_expression)) :
+    local.rotation_uses_legacy_interval ? null :
+    format("rate(%s %s)", var.settings.rotation_period_days, var.settings.rotation_period_days == 1 ? "day" : "days")
+  )
+  rotation_window_duration = var.settings.rotation_window_hours == null ? null : "${var.settings.rotation_window_hours}h"
+
   # Flatten projects → service_accounts into a single map keyed by "<proj_key>/<sa_key>".
   # The OpenAI project ID comes from proj.project_id; the outer map key is a logical name.
   service_accounts = {
     for item in flatten([
       for proj_key, proj in try(var.settings.projects, {}) : [
         for sa_key, sa in try(proj.service_accounts, {}) : {
-          project_key = proj_key
-          key         = "${proj_key}/${sa_key}"
-          project_id  = proj.project_id
-          name_prefix = try(sa.name_prefix, null)
-          name        = try(sa.name, null)
-          role        = try(sa.role, null)
-          scopes      = try(sa.scopes, null)
-          secret      = try(sa.secret, {})
+          project_key        = proj_key
+          key                = "${proj_key}/${sa_key}"
+          project_id         = proj.project_id
+          name_prefix        = try(sa.name_prefix, null)
+          name               = try(sa.name, null)
+          role               = try(sa.role, null)
+          scopes             = try(sa.scopes, null)
+          expires_in_seconds = sa.expires_in_seconds
+          secret             = try(sa.secret, {})
         }
       ]
     ]) : item.key => item
