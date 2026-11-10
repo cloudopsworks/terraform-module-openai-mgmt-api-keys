@@ -7,17 +7,28 @@
 #     Distributed Under Apache v2.0 License
 #
 
-# Service-account identity remains Terraform-owned. The provider also creates a
-# bootstrap project key; only subsequent rotating keys belong to the Lambda.
+# Service-account identity remains Terraform-owned; Lambda creates every
+# rotating project key. TFBOOTSTRAP is an unusable create-new marker.
 locals {
   service_account_secret_payloads = {
-    for key, account in local.service_account_resources : key => jsonencode({
+    for key, account in openai_service_account.this : key => jsonencode({
       key_type           = "project"
       api_key            = account.api_key_value
       api_key_id         = account.api_key_id
       name               = account.api_key_name
       project_id         = local.service_accounts[key].project_id
       service_account_id = account.id
+    })
+  }
+
+  service_account_bootstrap_payloads = {
+    for key, account in local.rotating_service_accounts : key => jsonencode({
+      key_type           = "project"
+      api_key            = null
+      api_key_id         = "__CREATE_NEW__"
+      name               = local.sa_names[key]
+      project_id         = account.project_id
+      service_account_id = openai_service_account.rotating[key].id
     })
   }
 
@@ -34,12 +45,8 @@ locals {
 
   admin_bootstrap_payloads = {
     for key, api_key in local.rotating_admin_keys : key => jsonencode({
-      key_type           = "admin"
-      api_key            = null
-      api_key_id         = "__CREATE_NEW__"
-      name               = local.admin_key_names[key]
-      project_id         = null
-      service_account_id = null
+      api_key    = null
+      api_key_id = "__CREATE_NEW__"
     })
   }
 
@@ -96,10 +103,10 @@ resource "aws_secretsmanager_secret_version" "this" {
 resource "aws_secretsmanager_secret_version" "rotation_bootstrap" {
   for_each       = local.rotating_service_accounts
   secret_id      = aws_secretsmanager_secret.this[each.key].id
-  secret_string  = local.service_account_secret_payloads[each.key]
+  secret_string  = local.service_account_bootstrap_payloads[each.key]
   version_stages = ["TFBOOTSTRAP"]
 
-  # Never restore the bootstrap key over Lambda-promoted AWSCURRENT.
+  # Never restore the bootstrap marker over Lambda-promoted AWSCURRENT.
   lifecycle {
     ignore_changes = [secret_string, version_stages]
   }

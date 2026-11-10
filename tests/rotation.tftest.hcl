@@ -45,6 +45,7 @@ run "rotation_off_keeps_terraform_ownership" {
   assert {
     condition = (
       length(openai_service_account.this) == 1 &&
+      openai_service_account.this["engineering/backend"].create_api_key == true &&
       length(openai_service_account.rotating) == 0 &&
       length(openai_admin_api_key.this) == 1 &&
       length(aws_secretsmanager_secret_version.this) == 1 &&
@@ -88,6 +89,7 @@ run "module_lambda_rotates_both_families" {
     condition = (
       length(openai_service_account.this) == 0 &&
       length(openai_service_account.rotating) == 1 &&
+      openai_service_account.rotating["engineering/backend"].create_api_key == false &&
       length(openai_admin_api_key.this) == 0 &&
       length(aws_secretsmanager_secret_version.rotation_bootstrap) == 1 &&
       length(aws_secretsmanager_secret_version.admin_rotation_bootstrap) == 1 &&
@@ -199,12 +201,16 @@ run "structured_payloads_and_rotation_config" {
   assert {
     condition = (
       jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).key_type == "project" &&
-      jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).api_key_id == openai_service_account.rotating["engineering/backend"].api_key_id &&
+      jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).api_key == null &&
+      jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).api_key_id == "__CREATE_NEW__" &&
+      jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).name == "backend" &&
+      length(keys(jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string))) == 6 &&
       jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).project_id == "proj_engineering" &&
       jsondecode(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].secret_string).service_account_id == openai_service_account.rotating["engineering/backend"].id &&
       contains(aws_secretsmanager_secret_version.rotation_bootstrap["engineering/backend"].version_stages, "TFBOOTSTRAP") &&
       jsondecode(aws_secretsmanager_secret_version.admin_rotation_bootstrap["operations"].secret_string).api_key == null &&
       jsondecode(aws_secretsmanager_secret_version.admin_rotation_bootstrap["operations"].secret_string).api_key_id == "__CREATE_NEW__" &&
+      length(keys(jsondecode(aws_secretsmanager_secret_version.admin_rotation_bootstrap["operations"].secret_string))) == 2 &&
       contains(aws_secretsmanager_secret_version.admin_rotation_bootstrap["operations"].version_stages, "TFBOOTSTRAP") &&
       jsondecode(aws_secretsmanager_secret_version.rotation_config["engineering/backend"].secret_string).schema_version == 1 &&
       jsondecode(aws_secretsmanager_secret_version.rotation_config["engineering/backend"].secret_string).key_type == "project" &&

@@ -4,7 +4,7 @@
 | ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.35 |
-| <a name="requirement_openai"></a> [openai](#requirement\_openai) | ~> 0.1 |
+| <a name="requirement_openai"></a> [openai](#requirement\_openai) | >= 0.2.1, < 1.0.0 |
 
 ## Providers
 
@@ -63,5 +63,5 @@
 | <a name="output_secret_arns"></a> [secret\_arns](#output\_secret\_arns) | Map of AWS Secrets Manager secret ARNs holding service account API keys, keyed by '<project\_key>/<service\_account\_key>' |
 | <a name="output_secret_names"></a> [secret\_names](#output\_secret\_names) | Map of AWS Secrets Manager secret names holding service account API keys, keyed by '<project\_key>/<service\_account\_key>' |
 | <a name="output_service_account_api_key_ids"></a> [service\_account\_api\_key\_ids](#output\_service\_account\_api\_key\_ids) | Map of Terraform-owned, nonrotating service-account API key IDs; rotating keys are Lambda-owned |
-| <a name="output_service_account_bootstrap_api_key_ids"></a> [service\_account\_bootstrap\_api\_key\_ids](#output\_service\_account\_bootstrap\_api\_key\_ids) | Map of historical bootstrap API key IDs created with rotating service accounts; these are not necessarily the active keys |
+| <a name="output_service_account_bootstrap_api_key_ids"></a> [service\_account\_bootstrap\_api\_key\_ids](#output\_service\_account\_bootstrap\_api\_key\_ids) | Deprecated compatibility output: rotating accounts create no bootstrap key, so values are null; historical state may contain retired key IDs |
 | <a name="output_service_account_ids"></a> [service\_account\_ids](#output\_service\_account\_ids) | Map of OpenAI service account IDs keyed by '<project\_key>/<service\_account\_key>' |

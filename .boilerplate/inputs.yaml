@@ -10,7 +10,7 @@
 #           name_prefix: "myapp"        # (Optional) Name prefix; final name = name_prefix + "-" + system_name
 #           name: "fixed-name"          # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
 #           role: "member"              # (Optional) Project role for the service account. Valid values: "member", "owner". Default: "member"
-#           scopes:                     # (Optional) Scopes for bootstrap and Lambda-created project keys. Default: null (provider default)
+#           scopes:                     # (Optional) Project-key scopes. Without rotation: provider bootstrap; with rotation: Lambda-created keys. Default: null
 #             - "api.model.request"     #            With rotation, later scope changes update TFCONFIG without replacing the account
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name

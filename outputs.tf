@@ -22,7 +22,7 @@ output "service_account_api_key_ids" {
 }
 
 output "service_account_bootstrap_api_key_ids" {
-  description = "Map of historical bootstrap API key IDs created with rotating service accounts; these are not necessarily the active keys"
+  description = "Deprecated compatibility output: rotating accounts create no bootstrap key, so values are null; historical state may contain retired key IDs"
   value = {
     for k, v in openai_service_account.rotating : k => v.api_key_id
   }

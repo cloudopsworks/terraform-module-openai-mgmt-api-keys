@@ -18,7 +18,7 @@
 #           name_prefix: "myapp"        # (Optional) Name prefix; final name = name_prefix + "-" + system_name
 #           name: "fixed-name"          # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
 #           role: "member"              # (Optional) Project role for the service account. Values: "member", "owner". Default: "member"
-#           scopes:                     # (Optional) Project-key scopes. Default: null (provider default); [] is not "no access"
+#           scopes:                     # (Optional) Project-key scopes. Default: null; [] is not "no access". Lambda owns all rotating keys
 #             - "api.model.request"     #            With rotation, later changes update TFCONFIG without replacing the account
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name

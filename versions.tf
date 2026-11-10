@@ -17,7 +17,7 @@ terraform {
     }
     openai = {
       source  = "cloudopsworks/openai"
-      version = "~> 0.1"
+      version = ">= 0.2.1, < 1.0.0"
     }
   }
 }

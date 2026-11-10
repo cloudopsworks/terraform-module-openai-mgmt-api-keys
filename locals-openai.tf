@@ -37,8 +37,8 @@ locals {
     if var.settings.rotation_lambda == null || !account.secret.rotation_enabled
   }
 
-  # An enrolled service account retains Terraform ownership of its identity.
-  # Only the API key created alongside it is handed over to the Lambda.
+  # An enrolled service account retains Terraform ownership of its identity;
+  # Lambda owns every rotating API key, including the first.
   service_account_resources = merge(openai_service_account.this, openai_service_account.rotating)
 
   # Compute the effective name for each OpenAI service account.

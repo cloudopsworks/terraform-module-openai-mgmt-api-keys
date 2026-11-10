@@ -54,9 +54,10 @@ This module manages OpenAI credential infrastructure on AWS:
 
 1. **Project service accounts** — creates an `openai_service_account` for each configured
    service account inside a project. OpenAI provisions an API key during service-account
-   creation; that bootstrap key is captured and stored in AWS Secrets Manager. Each service account
-   can be assigned a project `role` (`member` or `owner`) and an optional set of `scopes`
-   for the API key it owns.
+   creation only when rotation is off; Terraform stores that key in AWS Secrets Manager.
+   With rotation, the provider creates the account without a key and the Lambda creates
+   every key, including the first. Each account has a project `role` (`member` or `owner`)
+   and optional key `scopes`.
 
 2. **Organization admin keys** — creates Terraform-managed `openai_admin_api_key`
    resources when rotation is off. When enrolled, the Lambda creates admin keys
@@ -73,7 +74,9 @@ This module manages OpenAI credential infrastructure on AWS:
    individual key out when necessary, but is **not recommended**. Without a Lambda, all
    keys remain Terraform-owned and no rotation schedules are created.
 
-> **Provider version:** this module targets the `cloudopsworks/openai` provider `~> 0.1`.
+> **Provider version:** rotating project keys require `cloudopsworks/openai` `>= 0.2.1`
+> for identity-only service-account creation. Publish that provider version and deploy
+> a Lambda supporting keyless project bootstrap **before** applying this module change.
 > Releases prior to `v2.0.0` targeted the `mkdev-me/openai` provider and the
 > `openai_project_service_account` resource — see [Breaking changes in v2.0.0](#breaking-changes-in-v200).
 
@@ -119,8 +122,8 @@ sensitive key material. Do not print secret values or include them in outputs.
 
 | Stage | Owner | Purpose |
 |-------|-------|---------|
-| `AWSCURRENT` | Terraform initially; Lambda after enrollment/first rotation | Active six-field credential JSON, except the first admin-key marker before rotation. |
-| `TFBOOTSTRAP` | Terraform, rotating keys only | Initial version. Project account: the real key created with the account. New admin key: `api_key = null`, `api_key_id = "__CREATE_NEW__"` marker; Lambda must create the first admin key. Existing bootstrap versions are not rewritten. |
+| `AWSCURRENT` | Terraform initially; Lambda after enrollment/first rotation | Active six-field credential JSON, except the first-create marker before rotation. |
+| `TFBOOTSTRAP` | Terraform, rotating keys only | Initial marker with `api_key = null` and `api_key_id = "__CREATE_NEW__"`. Project markers also include key type, name, project ID, and service-account ID; admin markers contain only the two marker fields. The Lambda creates the first key. Existing bootstrap versions are not rewritten. |
 | `TFCONFIG` | Terraform, rotating keys only | Creation parameters, not a usable credential. |
 | `AWSPENDING` | Lambda | Candidate version written with the rotation event token before promotion. |
 
@@ -151,12 +154,13 @@ permissions. Read `TFCONFIG` by staging label, not by default `AWSCURRENT`.
 
 The Terraform provider treats `scopes` on `openai_service_account` as
 **replace-only**. With rotation off, changing them replaces the service account,
-its key, and the stored secret version. With rotation on, Terraform ignores later
-scope changes on the service-account resource but updates `TFCONFIG`; the Lambda
-must apply new scopes when creating replacement keys. Terraform still owns
+its key, and the stored secret version. With rotation on, the provider creates
+no key, and scopes flow only through `TFCONFIG` to the Lambda; existing account
+scope state is ignored to avoid replacement during migration. Terraform still owns
 service-account `project_id`, name, and role, so replacing that identity can
-invalidate an active key and requires a coordinated rotation. The bootstrap
-key ID output is historical after the Lambda retires it, not an active-key ID.
+invalidate an active key and requires a coordinated rotation. The deprecated
+bootstrap-key-ID output is null for new rotating accounts; historical state
+may still contain IDs that are not active.
 
 ### Admin key expiry
 
@@ -181,6 +185,16 @@ not carry an organization ID; configure and verify that organization boundary
 in the Lambda deployment rather than inferring it from a secret name. Test a
 nonproduction secret before enrolling production consumers.
 
+**Rollout order:** deploy the Lambda version that accepts both legacy real
+project bootstrap credentials and new six-field keyless project markers;
+publish the provider with `create_api_key = false`; then upgrade this module.
+This is an additive, minor-version migration, not a reason to replace a
+service account or regenerate its active key. Verify the Lambda's management
+secret contains both `api_key` and the matching `organization_id`, its IAM
+policy covers target secret ARNs, and a nonproduction rotation reaches
+`AWSCURRENT` before enrolling consumers. The module's mock tests cannot prove
+that a deployed Lambda works.
+
 For each **existing** service account being enrolled, preserve the account and
 its current secret version by moving their Terraform addresses before applying:
 
@@ -190,6 +204,13 @@ terragrunt state mv 'openai_service_account.this["my-project/worker"]' \
 terragrunt state mv 'aws_secretsmanager_secret_version.this["my-project/worker"]' \
   'aws_secretsmanager_secret_version.rotation_bootstrap["my-project/worker"]'
 ```
+
+Review the subsequent plan: the same account ID and current credential must
+remain, with no remote account/key deletion and no `AWSCURRENT` overwrite.
+The provider relinquishes bootstrap-key state when `create_api_key` becomes
+false; historical state snapshots and the prior `TFBOOTSTRAP` version may
+still contain the old credential. Securely retire/purge them under your
+state and Secrets Manager retention policy, not by deleting the live account.
 
 For each **existing** admin key being enrolled, record its current key ID and
 securely read its active value first. Detach the key resource from state (do
@@ -205,15 +226,20 @@ Legacy active versions may contain only `{"api_key":"..."}` or a plain string.
 Before starting rotation, securely backfill **a new AWSCURRENT version** with the
 six-field JSON contract, including the real `api_key_id`, name, and relevant
 project/service-account IDs; never place the plaintext in shell history or logs.
-Capture the admin ID before `state rm`; the service-account bootstrap ID is
-available in Terraform state or `service_account_bootstrap_api_key_ids`. A
+Capture the admin ID before `state rm`; a legacy service-account bootstrap ID
+may be available in historical Terraform state. A
 backfill must not erase the old version or move `TFCONFIG`. Review `terragrunt
 plan` to confirm no old OpenAI key or service account is destroyed, no existing
 active version is replaced, and only configuration/schedules are added.
 
-On a new admin secret the initial `AWSCURRENT` marker is **not** a usable
-credential until the Lambda completes its first rotation; gate consumers on
-success. Existing version states moved to bootstrap addresses may lack a
+On a new project or admin secret the initial `AWSCURRENT` marker is **not** a
+usable credential until the Lambda completes its first rotation; gate consumers
+on success. Older admin bootstrap versions may have a six-field marker that
+the Lambda rejects; because Terraform ignores changes to bootstrap values,
+upgrading this module alone will not repair those versions. Coordinate a new
+two-field marker version and label it `TFBOOTSTRAP`/`AWSCURRENT` only after
+confirming no active credential would be displaced. Existing version states
+moved to bootstrap addresses may lack a
 `TFBOOTSTRAP` label; the Lambda must use `AWSCURRENT` and `TFCONFIG`, not require
 that historical label. Terraform may briefly leave `TFCONFIG` unavailable
 while replacing its version after a setting change. Retry that read; never
@@ -324,7 +350,7 @@ Scaffolding produces the annotated `inputs.yaml` below. Every key mirrors
 #           name_prefix: "myapp"        # (Optional) Name prefix; final name = name_prefix + "-" + system_name
 #           name: "fixed-name"          # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
 #           role: "member"              # (Optional) Project role for the service account. Valid values: "member", "owner". Default: "member"
-#           scopes:                     # (Optional) Scopes for bootstrap and Lambda-created project keys. Default: null (provider default)
+#           scopes:                     # (Optional) Project-key scopes. Without rotation: provider bootstrap; with rotation: Lambda-created keys. Default: null
 #             - "api.model.request"     #            With rotation, later scope changes update TFCONFIG without replacing the account
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
@@ -544,7 +570,7 @@ hierarchy — only `settings` belongs in `inputs.yaml`.
 |--------|-------------|
 | `service_account_ids` | OpenAI service account IDs keyed by `<project_key>/<service_account_key>` |
 | `service_account_api_key_ids` | Terraform-owned nonrotating service-account key IDs only |
-| `service_account_bootstrap_api_key_ids` | Historical bootstrap key IDs for rotating service accounts; not the current IDs after rotation |
+| `service_account_bootstrap_api_key_ids` | Deprecated compatibility output; null for new rotating accounts, possibly historical IDs in migrated state |
 | `secret_arns` | Secrets Manager ARNs holding service account API keys |
 | `secret_names` | Secrets Manager names holding service account API keys |
 | `admin_key_ids` | Terraform-owned nonrotating admin key IDs only |
@@ -685,7 +711,7 @@ Copy this brief into the separate rotation-Lambda project:
 > management API-key module. The Terraform module owns AWS secret containers,
 > an initial `TFBOOTSTRAP` version, `TFCONFIG`, the rotation schedule,
 > and project service-account identities. Your Lambda owns every enrolled
-> OpenAI key after bootstrap and all usable rotated `AWSPENDING`/`AWSCURRENT`
+> OpenAI key, including the first, and all usable `AWSPENDING`/`AWSCURRENT`
 > versions. Never modify `TFCONFIG` or `TFBOOTSTRAP`, and never recreate or
 > delete the service-account identity during ordinary key rotation.
 >
@@ -718,9 +744,11 @@ Copy this brief into the separate rotation-Lambda project:
 > Every usable credential version must include `key_type`, `api_key`,
 > `api_key_id`, `name`, `project_id`, and `service_account_id`. For a new
 > admin secret, the **only** first-create marker is the pair `api_key = null`
-> and `api_key_id = "__CREATE_NEW__"`; reject malformed markers. A project
-> secret starts with a **real** provider-created bootstrap key, which must
-> be retired only after a replacement is tested and promoted. Existing
+> and `api_key_id = "__CREATE_NEW__"`; reject malformed markers. A new project
+> secret has those two values plus `key_type = "project"`, name, project ID,
+> and service-account ID; it has no key to retire. Legacy project bootstrap
+> secrets may contain a real provider-created key, which must be retired only
+> after a replacement is tested and promoted. Existing
 > deployments may have a legacy active payload; migration must normalize
 > it before enabling rotation. Never treat bootstrap metadata held in
 > Terraform state as the current key after rotation.
@@ -733,7 +761,7 @@ Copy this brief into the separate rotation-Lambda project:
 > finish/cleanup retryable after promotion. Define an explicit reconciliation
 > policy for a crash after OpenAI Create but before AWS pending write;
 > perfect cross-service exactly-once behavior cannot be assumed. Handle
-> first admin creation, project bootstrap retirement, ordinary rotation,
+> first admin/project creation, legacy project bootstrap retirement, ordinary rotation,
 > changed `TFCONFIG`, missing stage, duplicate events, expiration, identity
 > replacement, and decommissioning in tests.
 
@@ -761,7 +789,7 @@ Available targets:
 | ---- | ------- |
 | <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | >= 1.3 |
 | <a name="requirement_aws"></a> [aws](#requirement\_aws) | ~> 6.35 |
-| <a name="requirement_openai"></a> [openai](#requirement\_openai) | ~> 0.1 |
+| <a name="requirement_openai"></a> [openai](#requirement\_openai) | >= 0.2.1, < 1.0.0 |
 
 ## Providers
 
@@ -820,7 +848,7 @@ Available targets:
 | <a name="output_secret_arns"></a> [secret\_arns](#output\_secret\_arns) | Map of AWS Secrets Manager secret ARNs holding service account API keys, keyed by '<project\_key>/<service\_account\_key>' |
 | <a name="output_secret_names"></a> [secret\_names](#output\_secret\_names) | Map of AWS Secrets Manager secret names holding service account API keys, keyed by '<project\_key>/<service\_account\_key>' |
 | <a name="output_service_account_api_key_ids"></a> [service\_account\_api\_key\_ids](#output\_service\_account\_api\_key\_ids) | Map of Terraform-owned, nonrotating service-account API key IDs; rotating keys are Lambda-owned |
-| <a name="output_service_account_bootstrap_api_key_ids"></a> [service\_account\_bootstrap\_api\_key\_ids](#output\_service\_account\_bootstrap\_api\_key\_ids) | Map of historical bootstrap API key IDs created with rotating service accounts; these are not necessarily the active keys |
+| <a name="output_service_account_bootstrap_api_key_ids"></a> [service\_account\_bootstrap\_api\_key\_ids](#output\_service\_account\_bootstrap\_api\_key\_ids) | Deprecated compatibility output: rotating accounts create no bootstrap key, so values are null; historical state may contain retired key IDs |
 | <a name="output_service_account_ids"></a> [service\_account\_ids](#output\_service\_account\_ids) | Map of OpenAI service account IDs keyed by '<project\_key>/<service\_account\_key>' |
 
 
