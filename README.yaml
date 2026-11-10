@@ -20,29 +20,36 @@ github_repo: cloudopsworks/terraform-module-openai-mgmt-api-keys
 description: |-
   Terraform module for managing OpenAI project service accounts and organization admin API keys
   through the [cloudopsworks/openai](https://registry.terraform.io/providers/cloudopsworks/openai/latest)
-  provider. API keys are issued automatically when a service account is provisioned and are stored
-  securely in AWS Secrets Manager. Both project-scoped service account keys — optionally restricted
-  to a set of API scopes — and organization-level admin keys with relative expiry are supported.
+  provider. It stores structured credentials in AWS Secrets Manager and optionally schedules
+  module-wide Lambda rotation for project service-account keys and organization admin keys.
+  Terraform retains service-account identity; the Lambda owns enrolled key rotation.
 
 # Introduction to the project
 introduction: |-
   ## Overview
 
-  This module automates the full lifecycle of OpenAI API credentials on AWS:
+  This module manages OpenAI credential infrastructure on AWS:
 
   1. **Project service accounts** — creates an `openai_service_account` for each configured
      service account inside a project. OpenAI provisions an API key during service-account
-     creation; that key is captured and stored in AWS Secrets Manager. Each service account
+     creation; that bootstrap key is captured and stored in AWS Secrets Manager. Each service account
      can be assigned a project `role` (`member` or `owner`) and an optional set of `scopes`
      for the API key it owns.
 
-  2. **Organization admin keys** — creates `openai_admin_api_key` resources for
-     organization-level access, with an optional relative expiry expressed in seconds,
-     hours or days.
+  2. **Organization admin keys** — creates Terraform-managed `openai_admin_api_key`
+     resources when rotation is off. When enrolled, the Lambda creates admin keys
+     instead. Both modes support relative expiry in seconds, hours, or days.
 
-  3. **AWS Secrets Manager** — every key (project service account or admin) is persisted as a
-     Secrets Manager secret immediately after creation. Secrets can be stored either as a
-     JSON object `{"api_key": "<value>"}` (default) or as a plain string when `plain = true`.
+  3. **AWS Secrets Manager** — every active key is persisted as structured JSON containing
+     its value, ID, name, and applicable project/service-account identity. Plain-string
+     secrets are rejected. Terraform writes nonrotating versions; a configured Lambda writes
+     rotating `AWSPENDING` and `AWSCURRENT` versions.
+
+  4. **Optional rotation** — `settings.rotation_lambda` selects one Lambda by function name
+     or ARN for every enrolled key. `settings.rotation_period_days` is shared across all
+     enrollments (default: 30, allowed: 1-1000). `secret.rotation_enabled = false` opts an
+     individual key out when necessary, but is **not recommended**. Without a Lambda, all
+     keys remain Terraform-owned and no rotation schedules are created.
 
   > **Provider version:** this module targets the `cloudopsworks/openai` provider `~> 0.1`.
   > Releases prior to `v2.0.0` targeted the `mkdev-me/openai` provider and the
@@ -69,25 +76,168 @@ introduction: |-
 
   ### Secret structure
 
-  | `plain` | Stored value |
-  |---------|-------------|
-  | `false` (default) | `{"api_key": "sk-..."}` |
-  | `true` | `sk-...` |
+  Every usable credential version, rotating or not, is a JSON object with these six fields:
+
+  ```json
+  {
+    "key_type": "project",
+    "api_key": "sk-...",
+    "api_key_id": "key_...",
+    "name": "actual-key-name",
+    "project_id": "proj_...",
+    "service_account_id": "svc_..."
+  }
+  ```
+
+  For an admin key, `key_type` is `"admin"`; `project_id` and
+  `service_account_id` are JSON `null`, while `api_key_id` is the real admin-key ID.
+  `secret.plain = true` is invalid even without rotation; migrate legacy consumers
+  to JSON parsing. Terraform state and Secrets Manager versions both contain
+  sensitive key material. Do not print secret values or include them in outputs.
+
+  | Stage | Owner | Purpose |
+  |-------|-------|---------|
+  | `AWSCURRENT` | Terraform initially; Lambda after enrollment/first rotation | Active six-field credential JSON, except the first admin-key marker before rotation. |
+  | `TFBOOTSTRAP` | Terraform, rotating keys only | Initial version. Project account: the real key created with the account. New admin key: `api_key = null`, `api_key_id = "__CREATE_NEW__"` marker; Lambda must create the first admin key. Existing bootstrap versions are not rewritten. |
+  | `TFCONFIG` | Terraform, rotating keys only | Creation parameters, not a usable credential. |
+  | `AWSPENDING` | Lambda | Candidate version written with the rotation event token before promotion. |
+
+  A rotating secret has a separately versioned `TFCONFIG` payload:
+
+  ```json
+  {
+    "schema_version": 1,
+    "key_type": "project",
+    "name": "resolved-key-name",
+    "project_id": "proj_...",
+    "service_account_id": "svc_...",
+    "scopes": ["api.model.request"],
+    "role": "member",
+    "expires_in_seconds": null
+  }
+  ```
+
+  For admin keys, `key_type` is `"admin"`, `project_id`, `service_account_id`,
+  `scopes`, and `role` are `null`, and `expires_in_seconds` is the configured
+  relative expiry normalized from seconds, hours, or days. Omission means no
+  expiration. For project keys, `expires_in_seconds` is currently `null`; the
+  module does not expose project-key TTL. `scopes = null` means the module has
+  not requested a restriction; do **not** interpret an empty scope list as no
+  permissions. Read `TFCONFIG` by staging label, not by default `AWSCURRENT`.
 
   ### Service account scopes
 
-  `scopes` are **create-only**. OpenAI does not accept scopes on the service-account create
-  endpoint, so the provider creates the service account without a default key and then issues
-  a scoped service-account API key. Changing `scopes` therefore **replaces** the service
-  account and its key — and, through `replace_triggered_by`, the Secrets Manager secret
-  version holding it. Omit `scopes` to get the default unscoped bootstrap key.
+  The Terraform provider treats `scopes` on `openai_service_account` as
+  **replace-only**. With rotation off, changing them replaces the service account,
+  its key, and the stored secret version. With rotation on, Terraform ignores later
+  scope changes on the service-account resource but updates `TFCONFIG`; the Lambda
+  must apply new scopes when creating replacement keys. Terraform still owns
+  service-account `project_id`, name, and role, so replacing that identity can
+  invalidate an active key and requires a coordinated rotation. The bootstrap
+  key ID output is historical after the Lambda retires it, not an active-key ID.
 
   ### Admin key expiry
 
   Admin key expiry is expressed as a **relative** duration, not an absolute timestamp.
   At most one of `expires_in_seconds`, `expire_in_hours` or `expire_in_days` may be set;
-  omitting all three creates a non-expiring key. Any change to the expiry replaces the key.
-  This is enforced by a variable validation rule.
+  omitting all three creates a non-expiring key. Values must resolve to a whole
+  number of seconds from 1 through 31,536,000 (one year). Without rotation,
+  changing expiry replaces the Terraform-owned key. With rotation, Terraform
+  updates `TFCONFIG`, and each Lambda-created replacement gets a fresh relative
+  TTL. Configure TTL comfortably beyond the rotation interval and retry window.
+
+  ### Rotation ownership and migration
+
+  The module **configures** rotation but does not deploy the Lambda or grant its
+  permissions. Supply an existing Lambda name or ARN. Give it an independently
+  managed OpenAI admin credential bound to the intended OpenAI organization,
+  least-privilege access to the enrolled secret
+  ARNs, permission to read `TFCONFIG` and write/promote candidate versions, and
+  permission to create, inspect, and retire the applicable OpenAI keys. Do not
+  make it depend on the key it is rotating to manage itself. `TFCONFIG` does
+  not carry an organization ID; configure and verify that organization boundary
+  in the Lambda deployment rather than inferring it from a secret name. Test a
+  nonproduction secret before enrolling production consumers.
+
+  For each **existing** service account being enrolled, preserve the account and
+  its current secret version by moving their Terraform addresses before applying:
+
+  ```sh
+  terragrunt state mv 'openai_service_account.this["my-project/worker"]' \
+    'openai_service_account.rotating["my-project/worker"]'
+  terragrunt state mv 'aws_secretsmanager_secret_version.this["my-project/worker"]' \
+    'aws_secretsmanager_secret_version.rotation_bootstrap["my-project/worker"]'
+  ```
+
+  For each **existing** admin key being enrolled, record its current key ID and
+  securely read its active value first. Detach the key resource from state (do
+  **not** destroy the remote key) and move only the existing version's state:
+
+  ```sh
+  terragrunt state rm 'openai_admin_api_key.this["terraform-provisioner"]'
+  terragrunt state mv 'aws_secretsmanager_secret_version.admin_key["terraform-provisioner"]' \
+    'aws_secretsmanager_secret_version.admin_rotation_bootstrap["terraform-provisioner"]'
+  ```
+
+  Legacy active versions may contain only `{"api_key":"..."}` or a plain string.
+  Before starting rotation, securely backfill **a new AWSCURRENT version** with the
+  six-field JSON contract, including the real `api_key_id`, name, and relevant
+  project/service-account IDs; never place the plaintext in shell history or logs.
+  Capture the admin ID before `state rm`; the service-account bootstrap ID is
+  available in Terraform state or `service_account_bootstrap_api_key_ids`. A
+  backfill must not erase the old version or move `TFCONFIG`. Review `terragrunt
+  plan` to confirm no old OpenAI key or service account is destroyed, no existing
+  active version is replaced, and only configuration/schedules are added.
+
+  On a new admin secret the initial `AWSCURRENT` marker is **not** a usable
+  credential until the Lambda completes its first rotation; gate consumers on
+  success. Existing version states moved to bootstrap addresses may lack a
+  `TFBOOTSTRAP` label; the Lambda must use `AWSCURRENT` and `TFCONFIG`, not require
+  that historical label. Terraform may briefly leave `TFCONFIG` unavailable
+  while replacing its version after a setting change. Retry that read; never
+  use stale/default creation settings or overwrite `AWSCURRENT`. A `project_id`
+  change can replace the Terraform-owned service-account identity and invalidate
+  the active key. Name and role update in place, but role changes can immediately
+  alter effective key permissions; test consumer access and coordinate rotation.
+  For identity replacement, prefer a **new logical service-account entry** and
+  tested consumer cutover; otherwise use a deliberate recovery plan for the old
+  key and secret. Do not treat identity replacement as ordinary rotation.
+
+  **Turning rotation off is a separate migration, not a safe flag toggle.** For
+  a project service account, move its identity state from
+  `openai_service_account.rotating["project/account"]` back to
+  `openai_service_account.this["project/account"]` only as part of a planned
+  cutover, before applying the flag change:
+
+  ```sh
+  terragrunt state mv 'openai_service_account.rotating["my-project/worker"]' \
+    'openai_service_account.this["my-project/worker"]'
+  ```
+
+  The provider's key value/ID in state is historical after rotation;
+  moving the account or old bootstrap-version state back does **not** make the
+  Lambda's current key Terraform-managed. Establish a fresh Terraform-owned
+  credential (normally through a new logical service-account entry and consumer
+  cutover), verify it, then retire the Lambda-owned key and schedule. If that
+  cannot be done without replacing the account, keep rotation enabled until
+  the replacement/cutover is approved and tested.
+
+  For an admin key, disabling enrollment causes Terraform to create a **new**
+  admin key and version, not to import the Lambda's existing plaintext key.
+  Plan a staged cutover: ensure the independent management credential remains
+  available, verify the proposed new key and secret version, switch consumers,
+  then retire the previous Lambda-owned admin key and schedule. Never blindly
+  toggle `rotation_lambda` or `rotation_enabled` to null/false and apply across
+  all entries at once; inspect each key's plan and preserve a rollback path.
+
+  **Decommissioning a rotating key is also coordinated work.** Removing an
+  enrolled admin entry or AWS secret does not revoke the Lambda-owned OpenAI
+  key: Terraform has no admin-key resource for that entry. First stop rotation,
+  move consumers to a replacement, and use the independent management credential
+  to revoke the active key plus any pending or orphan keys. Verify that revocation
+  and consumer cutover before removing the secret and `TFCONFIG`. For project
+  keys, decide explicitly whether the service-account identity is also being
+  retired; do not assume deleting a secret cleans up all its OpenAI keys.
 
   ### Breaking changes in v2.0.0
 
@@ -137,6 +287,8 @@ usage: |-
   ```yaml
   # Module configuration
   # settings:                             # (Optional) Settings for OpenAI API key management. Default: {}
+  #   rotation_lambda: "rotate-openai"    # (Optional) Module-wide Lambda function name or ARN. Default: null (rotation disabled)
+  #   rotation_period_days: 30            # (Optional) Shared rotation period, whole days 1-1000. Default: 30
   #   projects:                           # (Optional) Map of OpenAI projects keyed by a logical name. Default: {}
   #     my-project:                       # Logical key used to identify the project (not the OpenAI project ID)
   #       project_id: "proj_xxx"          # (Required) The OpenAI project ID
@@ -145,27 +297,29 @@ usage: |-
   #           name_prefix: "myapp"        # (Optional) Name prefix; final name = name_prefix + "-" + system_name
   #           name: "fixed-name"          # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
   #           role: "member"              # (Optional) Project role for the service account. Valid values: "member", "owner". Default: "member"
-  #           scopes:                     # (Optional) Scopes for the API key created with the service account. Default: unset (unscoped key)
-  #             - "api.model.request"     #            Create-only — changing scopes replaces the service account and its key
+  #           scopes:                     # (Optional) Scopes for bootstrap and Lambda-created project keys. Default: null (provider default)
+  #             - "api.model.request"     #            With rotation, later scope changes update TFCONFIG without replacing the account
   #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
   #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
   #             name: "fixed-secret"      # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
   #             path: "/custom/path"      # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>/<project_key>
-  #             plain: false              # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
+  #             plain: false              # (Optional, deprecated) Must be false; credentials always use structured JSON
   #             description: "..."        # (Optional) Human-readable description for the Secrets Manager secret
+  #             rotation_enabled: true     # (Optional) Enroll when rotation_lambda is set. Default: true; false opts out (not recommended)
   #   admin_keys:                         # (Optional) Map of org-level admin API keys keyed by logical name. Default: {}
   #     <key>:
   #       name_prefix: "admin"            # (Optional) Name prefix; final name = name_prefix + "-" + system_name
   #       name: "fixed-name"              # (Optional) Fixed name for the admin API key (mutually exclusive with name_prefix)
-  #       expires_in_seconds: 3600        # (Optional) Seconds until the key expires. At most one expiry field may be set. Default: unset (non-expiring)
-  #       expire_in_hours: 24             # (Optional) Hours until the key expires. At most one expiry field may be set. Default: unset (non-expiring)
-  #       expire_in_days: 90              # (Optional) Days until the key expires. At most one expiry field may be set. Default: unset (non-expiring)
+  #       expires_in_seconds: 3600        # (Optional) Relative TTL in seconds, 1-31536000. At most one expiry field. Default: null
+  #       expire_in_hours: 24             # (Optional) Relative TTL in hours; must resolve to 1-31536000 whole seconds. Default: null
+  #       expire_in_days: 90              # (Optional) Relative TTL in days; must resolve to 1-31536000 whole seconds. Default: null
   #       secret:                         # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
   #         name_prefix: "admin"          # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
   #         name: "fixed-secret"          # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
   #         path: "/custom/path"          # (Optional) Full admin secret parent path. Default: /<org_unit>/<env_name>/<env_type>/admin
-  #         plain: false                  # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
+  #         plain: false                  # (Optional, deprecated) Must be false; credentials always use structured JSON
   #         description: "..."            # (Optional) Human-readable description for the Secrets Manager secret
+  #         rotation_enabled: true         # (Optional) Enroll when rotation_lambda is set. Default: true; false opts out (not recommended)
   settings: {}
   ```
 
@@ -173,13 +327,15 @@ usage: |-
 
   ```yaml
   settings:
+    rotation_lambda: "rotate-openai-management" # Existing Lambda function name or ARN
+    rotation_period_days: 30             # Shared interval for every enrolled key
     projects:
       # Logical key — not the OpenAI project ID.
       backend-services:
         project_id: "proj_abc123"
         service_accounts:
           # Name derived from name_prefix + "-" + system_name.
-          # Secret stored as JSON: {"api_key": "sk-..."}
+          # Secret stores the six-field structured credential JSON.
           api-worker:
             name_prefix: "backend-worker"
             role: "member"
@@ -190,13 +346,13 @@ usage: |-
               description: "OpenAI API key for the backend worker service account"
               # path defaults to /<org_unit>/<env_name>/<env_type>/backend-services
 
-          # Fixed name, project owner, unscoped key stored as a plain string.
+          # Fixed name, project owner; opt out only if rotation is unsuitable.
           legacy-integration:
             name: "legacy-integration-sa"
             role: "owner"
             secret:
               name: "legacy-integration-openai-key"
-              plain: true
+              rotation_enabled: false # Not recommended; Terraform owns this key
 
       ml-experiments:
         project_id: "proj_xyz789"
@@ -216,12 +372,11 @@ usage: |-
           name_prefix: "ci-admin-openai"
           description: "CI pipeline org-level admin key"
 
-      # Non-expiring admin key stored as a plain string.
+      # Non-expiring admin key, still stored as structured JSON.
       ops-break-glass:
         name: "ops-break-glass"
         secret:
           name: "ops-break-glass-openai-admin"
-          plain: true
   ```
 
   ### 3. Generated `terragrunt.hcl`
@@ -305,6 +460,8 @@ usage: |-
   | `spoke_def` | `string` | no | Three-digit spoke ID. Default: `"001"` |
   | `is_hub` | `bool` | no | Hub or spoke configuration. Default: `false` |
   | `extra_tags` | `map(string)` | no | Additional tags merged onto all resources. Default: `{}` |
+  | `settings.rotation_lambda` | `string` | no | Module-wide Lambda function name or ARN. Default: `null` (rotation disabled) |
+  | `settings.rotation_period_days` | `number` | no | Shared whole-day rotation interval, 1-1000. Default: `30` |
   | `settings.projects` | `map(object)` | no | Map of OpenAI projects keyed by logical name. Default: `{}` |
   | `settings.admin_keys` | `map(object)` | no | Map of org-level admin API keys keyed by logical name. Default: `{}` |
 
@@ -325,12 +482,13 @@ usage: |-
   | `name_prefix` | `string` | no* | Name prefix; composed as `name_prefix-<system_name>` |
   | `name` | `string` | no* | Fixed verbatim name for the service account |
   | `role` | `string` | no | Project role. Possible values: `member`, `owner`. Default: `member` |
-  | `scopes` | `set(string)` | no | Scopes for the API key created with the service account (e.g. `api.model.request`). Create-only — changes replace the service account. Default: unset (unscoped key) |
+  | `scopes` | `set(string)` | no | Project-key scopes (e.g. `api.model.request`). Without rotation, changes replace the account; with rotation, `TFCONFIG` changes but the account remains. Default: `null` (provider default) |
   | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to service account naming |
   | `secret.name` | `string` | no | Fixed verbatim secret name |
   | `secret.path` | `string` | no | Secret path prefix. Default: `/<org_unit>/<env_name>/<env_type>/<project_key>` |
-  | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
+  | `secret.plain` | `bool` | no | Deprecated: must be `false`; JSON is mandatory. Default: `false` |
   | `secret.description` | `string` | no | Human-readable description for the Secrets Manager secret |
+  | `secret.rotation_enabled` | `bool` | no | Enroll when the module-wide Lambda is set. Default: `true`; `false` opts out (not recommended) |
 
   \* One of `name_prefix` or `name` must be provided.
 
@@ -340,27 +498,33 @@ usage: |-
   |-----------|------|----------|-------------|
   | `name_prefix` | `string` | no* | Name prefix; composed as `name_prefix-<system_name>` |
   | `name` | `string` | no* | Fixed verbatim name for the admin key |
-  | `expires_in_seconds` | `number` | no† | Seconds until the key expires. Default: unset (non-expiring) |
-  | `expire_in_hours` | `number` | no† | Hours until the key expires. Default: unset (non-expiring) |
-  | `expire_in_days` | `number` | no† | Days until the key expires. Default: unset (non-expiring) |
+  | `expires_in_seconds` | `number` | no† | Relative TTL in seconds. Default: unset (non-expiring) |
+  | `expire_in_hours` | `number` | no† | Relative TTL in hours. Default: unset (non-expiring) |
+  | `expire_in_days` | `number` | no† | Relative TTL in days. Default: unset (non-expiring) |
   | `secret.name_prefix` | `string` | no | Secret name prefix; falls back to admin key naming |
   | `secret.name` | `string` | no | Fixed verbatim secret name |
   | `secret.path` | `string` | no | Full admin secret parent path. Default: `/<org_unit>/<env_name>/<env_type>/admin` |
-  | `secret.plain` | `bool` | no | Store as plain string instead of JSON. Default: `false` |
+  | `secret.plain` | `bool` | no | Deprecated: must be `false`; JSON is mandatory. Default: `false` |
   | `secret.description` | `string` | no | Human-readable description for the Secrets Manager secret |
+  | `secret.rotation_enabled` | `bool` | no | Enroll when the module-wide Lambda is set. Default: `true`; `false` opts out (not recommended) |
 
   \* One of `name_prefix` or `name` must be provided.
-  † At most one of the three expiry attributes may be set; this is enforced by variable validation.
+  † At most one expiry attribute may be set; it must resolve to 1-31,536,000 whole seconds.
 
   ### Outputs
 
   | Output | Description |
   |--------|-------------|
   | `service_account_ids` | OpenAI service account IDs keyed by `<project_key>/<service_account_key>` |
-  | `service_account_api_key_ids` | IDs of the API keys created alongside each service account, keyed by `<project_key>/<service_account_key>` |
+  | `service_account_api_key_ids` | Terraform-owned nonrotating service-account key IDs only |
+  | `service_account_bootstrap_api_key_ids` | Historical bootstrap key IDs for rotating service accounts; not the current IDs after rotation |
   | `secret_arns` | Secrets Manager ARNs holding service account API keys |
   | `secret_names` | Secrets Manager names holding service account API keys |
-  | `admin_key_ids` | OpenAI admin API key IDs keyed by the `settings.admin_keys` logical name |
+  | `admin_key_ids` | Terraform-owned nonrotating admin key IDs only |
+  | `rotation_secret_arns` | Project service-account secret ARNs enrolled in rotation; use for Lambda IAM scoping |
+  | `rotation_config_version_ids` | Project `TFCONFIG` version IDs |
+  | `admin_rotation_secret_arns` | Admin secret ARNs enrolled in rotation; use for Lambda IAM scoping |
+  | `admin_rotation_config_version_ids` | Admin `TFCONFIG` version IDs |
   | `admin_secret_arns` | Secrets Manager ARNs holding admin API keys |
   | `admin_secret_names` | Secrets Manager names holding admin API keys |
 
@@ -384,7 +548,8 @@ examples: |-
   With `org.organization_unit = platform`, `org.environment_name = prod` and
   `org.environment_type = production`, the service account is named `myapp-<system_name>`
   and its API key is stored at
-  `/platform/prod/production/my-project/myapp-<system_name>` as `{"api_key": "sk-..."}`.
+  `/platform/prod/production/my-project/myapp-<system_name>` as structured JSON
+  with `key_type`, `api_key`, `api_key_id`, `name`, `project_id`, and `service_account_id`.
 
   ---
 
@@ -406,8 +571,9 @@ examples: |-
               name_prefix: "inference-openai"
   ```
 
-  Scopes are create-only: editing the `scopes` list replaces the service account, its API key
-  and the stored secret version.
+  Without rotation, editing `scopes` replaces the service account, its key, and
+  its stored secret version. With rotation, the account is retained and the new
+  scopes are written to `TFCONFIG` for the Lambda's next key creation.
 
   ---
 
@@ -425,8 +591,75 @@ examples: |-
           description: "Terraform provisioning admin key, rotated quarterly"
   ```
 
-  Omit all three expiry attributes for a non-expiring key. Changing the expiry replaces the
-  key and rewrites the Secrets Manager secret version.
+  Omit all three expiry attributes for a non-expiring key. Without rotation,
+  changing the expiry replaces the key and stored version; with rotation it
+  changes `TFCONFIG` for future Lambda-created keys.
+
+  ---
+
+  ### Lambda-agent prompt
+
+  Copy this brief into the separate rotation-Lambda project:
+
+  > Build an AWS Secrets Manager rotation Lambda for the Cloud Ops Works OpenAI
+  > management API-key module. The Terraform module owns AWS secret containers,
+  > an initial `TFBOOTSTRAP` version, `TFCONFIG`, the rotation schedule,
+  > and project service-account identities. Your Lambda owns every enrolled
+  > OpenAI key after bootstrap and all usable rotated `AWSPENDING`/`AWSCURRENT`
+  > versions. Never modify `TFCONFIG` or `TFBOOTSTRAP`, and never recreate or
+  > delete the service-account identity during ordinary key rotation.
+  >
+  > Use an **independent** OpenAI admin management credential, not the target
+  > secret's key. Bind it to the intended OpenAI organization in Lambda
+  > deployment configuration and verify that boundary; `TFCONFIG` has no
+  > organization ID and a secret name is not proof of organization identity.
+  > Implement Secrets Manager `createSecret`, `setSecret`,
+  > `testSecret`, and `finishSecret` using the event `SecretId` and
+  > `ClientRequestToken`; verify secret identity, rotation enrollment, token
+  > stages, and allowed ARN scope before changing anything. Read the exact
+  > `TFCONFIG` version by staging label and require `schema_version = 1`. It
+  > contains `key_type`, `name`, `project_id`, `service_account_id`, `scopes`,
+  > `role`, and `expires_in_seconds`. Snapshot its VersionId and values for
+  > each token. Retry a temporarily missing `TFCONFIG`; do not use defaults.
+  > `key_type = "admin"` has null project/service-account IDs, scopes, and role;
+  > `key_type = "project"` has real IDs and role, with null expiry. Preserve
+  > explicit empty scopes separately from null; an empty scope list is **not**
+  > no access. Validate the account's project/role context before creation.
+  >
+  > For admin keys, call `POST /organization/admin_api_keys` with `name` and
+  > optional relative `expires_in_seconds`. For project service-account keys,
+  > call the service-account API-key create endpoint for the configured
+  > `project_id` and `service_account_id` with configured name/scopes. Do not create
+  > a new service account. OpenAI returns the plaintext key only on Create;
+  > capture its actual value and ID immediately. Keep an independently
+  > auditable mapping from each new key to the Secrets Manager token for
+  > orphan reconciliation.
+  >
+  > Every usable credential version must include `key_type`, `api_key`,
+  > `api_key_id`, `name`, `project_id`, and `service_account_id`. For a new
+  > admin secret, the **only** first-create marker is the pair `api_key = null`
+  > and `api_key_id = "__CREATE_NEW__"`; reject malformed markers. A project
+  > secret starts with a **real** provider-created bootstrap key, which must
+  > be retired only after a replacement is tested and promoted. Existing
+  > deployments may have a legacy active payload; migration must normalize
+  > it before enabling rotation. Never treat bootstrap metadata held in
+  > Terraform state as the current key after rotation.
+  >
+  > Write the candidate as `AWSPENDING` under ClientRequestToken, test it
+  > without revealing it, promote it to `AWSCURRENT`, and only then delete the
+  > predecessor using the admin-key or project-key delete API as appropriate.
+  > Repeated steps must reuse an existing pending version, not create another
+  > OpenAI key. Persist enough predecessor/config-version information to make
+  > finish/cleanup retryable after promotion. Define an explicit reconciliation
+  > policy for a crash after OpenAI Create but before AWS pending write;
+  > perfect cross-service exactly-once behavior cannot be assumed. Handle
+  > first admin creation, project bootstrap retirement, ordinary rotation,
+  > changed `TFCONFIG`, missing stage, duplicate events, expiration, identity
+  > replacement, and decommissioning in tests.
+
+  Implementation references: [OpenAI admin-key creation](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/admin_api_keys/methods/create),
+  [OpenAI service-account key creation](https://developers.openai.com/api/reference/resources/admin/subresources/organization/subresources/projects/subresources/service_accounts/subresources/api_keys/methods/create),
+  and [AWS Secrets Manager rotation Lambda steps](https://docs.aws.amazon.com/secretsmanager/latest/userguide/rotate-secrets_lambda-functions.html).
 
 # How to get started quickly
 quickstart: |-

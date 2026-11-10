@@ -10,14 +10,21 @@
 output "service_account_ids" {
   description = "Map of OpenAI service account IDs keyed by '<project_key>/<service_account_key>'"
   value = {
-    for k, v in openai_service_account.this : k => v.id
+    for k, v in local.service_account_resources : k => v.id
   }
 }
 
 output "service_account_api_key_ids" {
-  description = "Map of OpenAI API key IDs created alongside each service account, keyed by '<project_key>/<service_account_key>'"
+  description = "Map of Terraform-owned, nonrotating service-account API key IDs; rotating keys are Lambda-owned"
   value = {
     for k, v in openai_service_account.this : k => v.api_key_id
+  }
+}
+
+output "service_account_bootstrap_api_key_ids" {
+  description = "Map of historical bootstrap API key IDs created with rotating service accounts; these are not necessarily the active keys"
+  value = {
+    for k, v in openai_service_account.rotating : k => v.api_key_id
   }
 }
 
@@ -36,9 +43,39 @@ output "secret_names" {
 }
 
 output "admin_key_ids" {
-  description = "Map of OpenAI admin API key IDs keyed by the settings.admin_keys logical name"
+  description = "Map of Terraform-owned nonrotating OpenAI admin API key IDs keyed by the settings.admin_keys logical name"
   value = {
     for k, v in openai_admin_api_key.this : k => v.id
+  }
+}
+
+output "rotation_secret_arns" {
+  description = "Map of service-account Secrets Manager ARNs enrolled in Lambda-owned rotation"
+  value = {
+    for k, v in aws_secretsmanager_secret.this : k => v.arn
+    if contains(keys(local.rotating_service_accounts), k)
+  }
+}
+
+output "rotation_config_version_ids" {
+  description = "Map of Terraform-managed service-account TFCONFIG version IDs"
+  value = {
+    for k, v in aws_secretsmanager_secret_version.rotation_config : k => v.version_id
+  }
+}
+
+output "admin_rotation_secret_arns" {
+  description = "Map of admin-key Secrets Manager ARNs enrolled in Lambda-owned rotation"
+  value = {
+    for k, v in aws_secretsmanager_secret.admin_key : k => v.arn
+    if contains(keys(local.rotating_admin_keys), k)
+  }
+}
+
+output "admin_rotation_config_version_ids" {
+  description = "Map of Terraform-managed admin-key TFCONFIG version IDs"
+  value = {
+    for k, v in aws_secretsmanager_secret_version.admin_rotation_config : k => v.version_id
   }
 }
 

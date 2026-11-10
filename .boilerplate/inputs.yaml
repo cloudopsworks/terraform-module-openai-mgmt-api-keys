@@ -1,5 +1,7 @@
 # Module configuration
 # settings:                             # (Optional) Settings for OpenAI API key management. Default: {}
+#   rotation_lambda: "rotate-openai"    # (Optional) Module-wide Lambda function name or ARN. Default: null (rotation disabled)
+#   rotation_period_days: 30            # (Optional) Shared rotation period, whole days 1-1000. Default: 30
 #   projects:                           # (Optional) Map of OpenAI projects keyed by a logical name. Default: {}
 #     my-project:                       # Logical key used to identify the project (not the OpenAI project ID)
 #       project_id: "proj_xxx"          # (Required) The OpenAI project ID
@@ -8,25 +10,27 @@
 #           name_prefix: "myapp"        # (Optional) Name prefix; final name = name_prefix + "-" + system_name
 #           name: "fixed-name"          # (Optional) Fixed name for the service account (mutually exclusive with name_prefix)
 #           role: "member"              # (Optional) Project role for the service account. Valid values: "member", "owner". Default: "member"
-#           scopes:                     # (Optional) Scopes for the API key created with the service account. Default: unset (unscoped key)
-#             - "api.model.request"     #            Create-only — changing scopes replaces the service account and its key
+#           scopes:                     # (Optional) Scopes for bootstrap and Lambda-created project keys. Default: null (provider default)
+#             - "api.model.request"     #            With rotation, later scope changes update TFCONFIG without replacing the account
 #           secret:                     # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
 #             name_prefix: "myapp"      # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
 #             name: "fixed-secret"      # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
 #             path: "/custom/path"      # (Optional) Secret path prefix. Default: /<org_unit>/<env_name>/<env_type>/<project_key>
-#             plain: false              # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
+#             plain: false              # (Optional, deprecated) Must be false; credentials always use structured JSON
 #             description: "..."        # (Optional) Human-readable description for the Secrets Manager secret
+#             rotation_enabled: true     # (Optional) Enroll when rotation_lambda is set. Default: true; false opts out (not recommended)
 #   admin_keys:                         # (Optional) Map of org-level admin API keys keyed by logical name. Default: {}
 #     <key>:
 #       name_prefix: "admin"            # (Optional) Name prefix; final name = name_prefix + "-" + system_name
 #       name: "fixed-name"              # (Optional) Fixed name for the admin API key (mutually exclusive with name_prefix)
-#       expires_in_seconds: 3600        # (Optional) Seconds until the key expires. At most one expiry field may be set. Default: unset (non-expiring)
-#       expire_in_hours: 24             # (Optional) Hours until the key expires. At most one expiry field may be set. Default: unset (non-expiring)
-#       expire_in_days: 90              # (Optional) Days until the key expires. At most one expiry field may be set. Default: unset (non-expiring)
+#       expires_in_seconds: 3600        # (Optional) Relative TTL in seconds, 1-31536000. At most one expiry field. Default: null
+#       expire_in_hours: 24             # (Optional) Relative TTL in hours; must resolve to 1-31536000 whole seconds. Default: null
+#       expire_in_days: 90              # (Optional) Relative TTL in days; must resolve to 1-31536000 whole seconds. Default: null
 #       secret:                         # (Optional) AWS Secrets Manager configuration for storing the API key. Default: {}
 #         name_prefix: "admin"          # (Optional) Secret name prefix; final name = name_prefix + "-" + system_name
 #         name: "fixed-secret"          # (Optional) Fixed secret name (mutually exclusive with secret.name_prefix)
 #         path: "/custom/path"          # (Optional) Full admin secret parent path. Default: /<org_unit>/<env_name>/<env_type>/admin
-#         plain: false                  # (Optional) Store API key as plain string; default false stores JSON {"api_key":"<value>"}
+#         plain: false                  # (Optional, deprecated) Must be false; credentials always use structured JSON
 #         description: "..."            # (Optional) Human-readable description for the Secrets Manager secret
+#         rotation_enabled: true         # (Optional) Enroll when rotation_lambda is set. Default: true; false opts out (not recommended)
 settings: {}

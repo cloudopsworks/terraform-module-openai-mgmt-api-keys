@@ -27,6 +27,20 @@ locals {
     ]) : item.key => item
   }
 
+  rotating_service_accounts = {
+    for key, account in local.service_accounts : key => account
+    if var.settings.rotation_lambda != null && account.secret.rotation_enabled
+  }
+
+  non_rotating_service_accounts = {
+    for key, account in local.service_accounts : key => account
+    if var.settings.rotation_lambda == null || !account.secret.rotation_enabled
+  }
+
+  # An enrolled service account retains Terraform ownership of its identity.
+  # Only the API key created alongside it is handed over to the Lambda.
+  service_account_resources = merge(openai_service_account.this, openai_service_account.rotating)
+
   # Compute the effective name for each OpenAI service account.
   # If name_prefix is set: name_prefix + "-" + system_name; otherwise use the fixed name.
   sa_names = {
@@ -56,11 +70,6 @@ locals {
     )
   }
 
-  # Determine whether to store plain string or JSON {"api_key":"<value>"} per entry.
-  secret_plain = {
-    for k, v in local.service_accounts : k => try(v.secret.plain, false)
-  }
-
   # Compute the optional description for each service account secret.
   secret_descriptions = {
     for k, v in local.service_accounts : k => try(v.secret.description, null)
@@ -68,6 +77,16 @@ locals {
 
   # Admin keys: org-level, not tied to a project.
   admin_keys = try(var.settings.admin_keys, {})
+
+  rotating_admin_keys = {
+    for key, api_key in local.admin_keys : key => api_key
+    if var.settings.rotation_lambda != null && api_key.secret.rotation_enabled
+  }
+
+  non_rotating_admin_keys = {
+    for key, api_key in local.admin_keys : key => api_key
+    if var.settings.rotation_lambda == null || !api_key.secret.rotation_enabled
+  }
 
   admin_key_names = {
     for k, v in local.admin_keys : k => (
@@ -90,10 +109,6 @@ locals {
     for k, v in local.admin_keys : k => (
       try(v.secret.path, null) != null ? trimsuffix(v.secret.path, "/") : format("%s/admin", local.secret_store_path)
     )
-  }
-
-  admin_secret_plain = {
-    for k, v in local.admin_keys : k => try(v.secret.plain, false)
   }
 
   # Compute the optional description for each admin key secret.

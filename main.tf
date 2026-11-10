@@ -7,15 +7,31 @@
 #     Distributed Under Apache v2.0 License
 #
 
-# Creates an OpenAI project service account for each entry across all configured projects.
+# Creates Terraform-owned OpenAI project service accounts for nonrotating keys.
 # The resource key is "<project_key>/<sa_key>". Creating a service account automatically
 # provisions an API key exposed via api_key_value (sensitive, only available at creation time).
 # When scopes are set the provider creates a scoped service-account API key instead of the
 # default bootstrap key; scope changes replace the service account.
 resource "openai_service_account" "this" {
-  for_each   = local.service_accounts
+  for_each   = local.non_rotating_service_accounts
   project_id = each.value.project_id
   name       = local.sa_names[each.key]
   scopes     = toset(try(each.value.scopes, null))
   role       = try(each.value.role, "member")
+}
+
+# Keep the service-account identity in Terraform while the Lambda rotates its
+# child API keys. The provider issues one bootstrap key when creating the account.
+resource "openai_service_account" "rotating" {
+  for_each   = local.rotating_service_accounts
+  project_id = each.value.project_id
+  name       = local.sa_names[each.key]
+  scopes     = toset(try(each.value.scopes, null))
+  role       = try(each.value.role, "member")
+
+  # Provider scope changes otherwise replace the entire service account.
+  # TFCONFIG separately carries desired scopes to the rotation Lambda.
+  lifecycle {
+    ignore_changes = [scopes]
+  }
 }
